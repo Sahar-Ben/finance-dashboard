@@ -1,6 +1,6 @@
 # Finance Dashboard — Specification
 
-Status: **Stages 1 and 2 built.** Stages 3–4 not started.
+Status: **Stages 1–3 built.** Stage 4 not started.
 
 ## Purpose
 
@@ -103,7 +103,7 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 4. Exchange rates as described above.
 5. Overview screen: reachable money in very large type; the long-term total beneath it; the currency toggle; "what changed" for both numbers against the previous month and against the first month of this year that has data, as an amount and a percentage; a breakdown by type as cards with totals and shares; a month selector defaulting to the latest month with snapshots; and the incomplete-month marking.
 
-## Stage 3: Accounts, cards, loans and trends
+## Stage 3: Accounts, cards, loans and trends — built
 
 1. Accounts screen upgraded: each account shows its latest balance, the change from the previous month, and when it was last updated. Group by institution, by country, or by owner. Grouping by owner shows exactly three groups, the two people and Joint, each with a subtotal. Show the original currency small beside converted amounts.
 2. Account detail: month-by-month history with a small chart; edit or delete any snapshot.
@@ -137,6 +137,7 @@ Build one stage at a time. After each stage: update SPEC.md, commit, merge to ma
 | `css/app.css` | Neon Prism styles. Colour tokens live on `:root`. |
 | `js/config.js` | The only configuration: `GOOGLE_CLIENT_ID` (public by design). |
 | `js/calc.js` | Pure calculations with no screen code: months and dates, amounts, exchange-rate lookup and conversion, monthly totals, gaps, import checks. |
+| `js/charts.js` | Small SVG charts (line with gaps and incomplete months, bars with an average line, stacked bars) and their tap/hover readout. No library. |
 | `js/sheets.js` | Thin Google Sheets API layer: read a tab as objects, append, update rows by id, create missing tabs and headers, check edit access. |
 | `js/app.js` | Sign-in, routing between tabs, screens and forms. |
 | `manifest.webmanifest`, `icons/` | Home-screen web app metadata and a generic icon (finished in Stage 4). |
@@ -151,6 +152,7 @@ GitHub Pages serves the `main` branch root. The allowed JavaScript origin for th
 - `fd.sheetId` — the spreadsheet id parsed from the pasted link.
 - `fd.token` — the current Google access token, its expiry (about one hour) and the signed-in email.
 - `fd.lastEmail` — used as a sign-in hint next time.
+- `fd.acctGroup` — the Accounts grouping (institution, country or owner).
 - `fd.displayCurrency` — the display currency chosen with the toggle (starts from Settings `default_currency`).
 
 ### Settings tab keys
@@ -200,3 +202,13 @@ When no person is configured yet, the first signed-in user is asked to set up bo
 - Totals use every account with a snapshot that month, including inactive ones (they existed then). Cards never count; their monthly total is shown separately as spending.
 - An active non-card account is **expected** from the month of its first snapshot onward. An account with no snapshots yet is expected from the latest month with balances. A missing expected balance marks the month incomplete and lists the account. An active home carries its last earlier value forward instead.
 - Overview: the month selector lists every month with any snapshot (card-only months are labelled). It defaults to the latest month with balances. Comparisons are against the previous calendar month and against the first month of the same year with balances, as amount and percentage, flagged when the other month is incomplete. Type cards show each type's total and share of assets (current, savings, investment, crypto, long_term, home); loans are shown as owed and subtracted.
+
+### Accounts, detail, cards, loans and trends (Stage 3)
+
+- **Accounts:** each account shows its latest balance converted with its own month's rate, the original amount in small type when the currency differs, the change from the previous calendar month (in the account's currency), and "upd <as-of date>". Loans show as negative. Cards show their latest monthly total.
+- **Grouping:** Bank, Country or Owner. Owner always shows exactly three groups (person 1, person 2, Joint); an unrecognised owner falls into Joint. Each group has a **net** subtotal (latest balances, loans subtracted, cards left out).
+- **Account detail** (tap an account): latest value, change, loan payment or the card's paying account, a chart of the history (line for balances, bars for cards, in the account's own currency), the full month list with **Edit** (amount and as-of date) and **Delete** for each snapshot, plus "Add balance" and "Edit account". Before an edit or delete, the snapshot is found again after a fresh read (by id, or by account and month) so a moved row is never touched.
+- **Cards:** month selector over months with card totals. Shows the combined total for the month (display currency) with a bar chart of this year and the average over months with data; the cards missing that month; a split by owner (three groups); and for each card its month total, its yearly bars and average in its own currency, and the account that pays it.
+- **Overview additions:** "Long-term view" cards for savings, investment, crypto, long_term and home with total, share of assets and change vs the previous month; a "Loans" card listing each active loan's remaining balance (for the selected month, else its latest) and monthly payment, and **fixed monthly commitments** = the sum of monthly_payment over active loans, converted at the latest rate.
+- **Trends:** period This year (default) / 12 months / All. Line charts for reachable money and the long-term total; stacked bars by type with loans drawn below zero. Months with missing balances get hollow dots and dashed segments; months with no balances leave a gap. Each month is converted at its own rate, and tapping a month shows its values.
+- **Chart colours:** the type colours are fixed per type (never reassigned) and were validated as a set against the panel colour for colour-blind separation and contrast. Text never uses the series colour; a legend always accompanies the stacked chart.

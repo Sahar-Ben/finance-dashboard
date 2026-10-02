@@ -229,6 +229,19 @@
     return { amount, pct };
   }
 
+  // Latest { month, snap } for an account, or null.
+  function latestSnapshot(idx, id) {
+    const list = idx.byAccount.get(norm(id)) || [];
+    return list.length ? list[list.length - 1] : null;
+  }
+
+  // Every month from `from` to `to`, inclusive, ascending.
+  function monthRange(from, to) {
+    const out = [];
+    for (let m = from; m <= to && out.length < 600; m = shiftMonth(m, 1)) out.push(m);
+    return out;
+  }
+
   // ---------- import ----------
 
   // Splits pasted text into raw rows: month | account_id | amount | currency | as_of_date
@@ -332,7 +345,7 @@
     TYPES, ASSET_TYPES, CURRENCIES, MONTH_NAMES, LARGE_CHANGE_RATIO, TRIVIAL_ILS,
     currentMonth, today, isMonth, normMonth, shiftMonth, monthLabel, lastDayOfMonth, normDate, parseAmount,
     validRate, rateTable, rateFor, convert,
-    isActive, indexSnapshots, snapshotMonths, balanceFor, monthTotals, change,
+    isActive, indexSnapshots, snapshotMonths, balanceFor, monthTotals, change, latestSnapshot, monthRange,
     splitImport, checkImport,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

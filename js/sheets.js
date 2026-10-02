@@ -198,6 +198,19 @@
     await call("/values:batchUpdate", { method: "POST", body: { valueInputOption: inputOption || "RAW", data } });
   }
 
+  // Deletes whole rows (1-based numbers) from a tab.
+  async function deleteRows(tab, rowNumbers) {
+    if (!rowNumbers.length) return;
+    const meta = await getMeta();
+    const sheet = meta.sheets.find((x) => x.properties.title === tab);
+    if (!sheet) throw new SheetsError(`No tab ${tab}`, 404);
+    const sid = sheet.properties.sheetId;
+    const requests = [...rowNumbers].sort((x, y) => y - x).map((r) => ({
+      deleteDimension: { range: { sheetId: sid, dimension: "ROWS", startIndex: r - 1, endIndex: r } },
+    }));
+    await call(":batchUpdate", { method: "POST", body: { requests } });
+  }
+
   const updateRow = (tab, keyField, key, changes) => updateRows(tab, keyField, [{ key, changes }]);
 
   // Settings is a key/value tab. Updates existing keys in place and appends new ones.
@@ -229,6 +242,6 @@
 
   window.Sheets = {
     SCHEMA, SheetsError, configure, parseSheetId, getMeta, checkCanEdit, ensureSchema,
-    readTab, appendRows, updateRow, updateRows, setCells, readSettings, writeSettings,
+    readTab, appendRows, updateRow, updateRows, setCells, deleteRows, readSettings, writeSettings,
   };
 })();

@@ -540,18 +540,194 @@
   });
   window.addEventListener("hashchange", () => { if (state.me) route(); });
 
-  // ---------- Placeholders (filled in later stages) ----------
+  // ---------- Cards ----------
 
-  function renderPlaceholder(label, title, text) {
-    $screen.innerHTML = `
-      <div class="page-head"><div><div class="label">${esc(label)}</div><h1>${esc(title)}</h1></div></div>
-      <div class="card empty stack"><div class="label">Coming soon</div><p class="muted">${esc(text)}</p></div>`;
-  }
   function renderCards() {
-    renderPlaceholder("Spending", "Cards", "Monthly card totals, this year's chart and the split by owner arrive in a later stage.");
+    const cur = state.displayCur;
+    const idx = Calc.indexSnapshots(state.snapshots);
+    const cards = state.accounts.filter((a) => lower(a.type) === "card");
+    const cardIds = new Set(cards.map((a) => norm(a.id)));
+    const head = `
+      <div class="page-head">
+        <div><div class="label">Spending</div><h1>Cards</h1></div>
+        ${curSegHtml()}
+      </div>`;
+    const cardMonths = [...new Set(state.snapshots.filter((s) => cardIds.has(norm(s.account_id)))
+      .map((s) => Calc.normMonth(s.month)).filter(Boolean))].sort().reverse();
+    if (!cards.length || !cardMonths.length) {
+      $screen.innerHTML = `${head}
+        <div class="card empty stack">
+          <p class="muted">${!cards.length ? "No cards yet. Add a card on the Accounts tab (type Card)." : "No card totals yet. Add each card's monthly total with Update."}</p>
+          <a class="btn block" href="${!cards.length ? "#accounts" : "#update"}">${!cards.length ? "Go to Accounts" : "Update"}</a>
+        </div>`;
+      bindCurSeg();
+      return;
+    }
+    if (!state.cardMonth || !cardMonths.includes(state.cardMonth)) state.cardMonth = cardMonths[0];
+    const month = state.cardMonth;
+    const year = month.slice(0, 4);
+    const lastInYear = [Calc.currentMonth(), ...cardMonths].filter((m) => m.slice(0, 4) === year).sort().pop() || `${year}-12`;
+    const yearMonths = Calc.monthRange(`${year}-01`, lastInYear);
+    const labels = yearMonths.map((m) => MONTHS[Number(m.slice(5)) - 1]);
+    const conv = (amt, c, m) => Calc.convert(amt, c, cur, state.rates, m);
+    const cardValue = (a, m, display) => {
+      const s = idx.get(norm(a.id), m);
+      if (!s) return null;
+      const v = Calc.parseAmount(s.amount);
+      if (!isFinite(v)) return null;
+      const own = norm(s.currency).toUpperCase() || norm(a.currency).toUpperCase();
+      return display ? conv(v, own, m) : v;
+    };
+    const combined = (m) => {
+      let sum = 0, any = false;
+      cards.forEach((a) => { const v = cardValue(a, m, true); if (v != null) { sum += v; any = true; } });
+      return any ? sum : null;
+    };
+    const avgOf = (vals) => { const v = vals.filter((x) => x != null); return v.length ? v.reduce((s, x) => s + x, 0) / v.length : null; };
+
+    const totals = yearMonths.map(combined);
+    const total = combined(month);
+    const avg = avgOf(totals);
+    const withData = cards.filter((a) => cardValue(a, month, false) != null);
+    const missing = cards.filter((a) => isActive(a) && cardValue(a, month, false) == null
+      && (idx.firstMonth.get(norm(a.id)) || "9999") <= month);
+
+    const owners = [...personNames(), JOINT];
+    const byOwner = owners.map((n) => {
+      let sum = 0;
+      cards.forEach((a) => { if ((matchName(a.owner, owners) || JOINT) === n) { const v = cardValue(a, month, true); if (v != null) sum += v; } });
+      return { name: n, sum };
+    });
+
+    const sel = `
+      <div class="month-bar">
+        <button class="icon-btn" id="cd-prev" aria-label="Earlier month" ${cardMonths.indexOf(month) >= cardMonths.length - 1 ? "disabled" : ""}>‹</button>
+        <select id="cd-month" aria-label="Month">${cardMonths.map((m) => `<option value="${m}" ${m === month ? "selected" : ""}>${Calc.monthLabel(m, true)}</option>`).join("")}</select>
+        <button class="icon-btn" id="cd-next" aria-label="Later month" ${cardMonths.indexOf(month) <= 0 ? "disabled" : ""}>›</button>
+      </div>`;
+    const tip = (m, v) => `${Calc.monthLabel(m, true)} · ${v != null ? fmtMoney(v, cur) : "no totals"}`;
+
+    const cardItems = cards.filter((a) => isActive(a) || yearMonths.some((m) => cardValue(a, m, false) != null))
+      .sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname))).map((a) => {
+        const own = norm(a.currency).toUpperCase() || "ILS";
+        const vals = yearMonths.map((m) => cardValue(a, m, false));
+        const v = cardValue(a, month, false);
+        const cAvg = avgOf(vals);
+        const linked = norm(a.linked_account) ? state.accounts.find((x) => x.id === norm(a.linked_account)) : null;
+        return `
+          <div class="card stack">
+            <div class="spread">
+              <div><h3>${accountName(a)}</h3><div class="muted small">${esc(a.owner)} · paid from ${linked ? accountName(linked) : "—"}</div></div>
+              <div class="acct-right">
+                <div class="acct-amount mono">${v != null ? esc(fmtMoney(v, own)) : "—"}</div>
+                ${v != null && own !== cur ? `<div class="acct-orig mono">≈ ${esc(fmtMoney(conv(v, own, month), cur))}</div>` : ""}
+              </div>
+            </div>
+            <div class="muted small mono">${Calc.monthLabel(month, true)}${cAvg != null ? ` · average ${esc(fmtMoney(cAvg, own))} / month in ${year}` : ""}</div>
+            ${Charts.bars({ labels, values: vals, avg: cAvg, highlight: yearMonths.indexOf(month), fmtTick: fmtTickFor(own),
+              tips: yearMonths.map((m, i) => `${Calc.monthLabel(m, true)} · ${vals[i] != null ? fmtMoney(vals[i], own) : "no total"}`), ariaLabel: `${norm(a.nickname)} by month` })}
+          </div>`;
+      }).join("");
+
+    $screen.innerHTML = `${head}
+      <div class="stack-lg">
+        ${sel}
+        <div class="card hero stack">
+          <div class="label">All cards · ${Calc.monthLabel(month, true)}</div>
+          <div class="big-number">${esc(fmtMoney(total, cur))}</div>
+          <div class="muted small">${withData.length} card${withData.length === 1 ? "" : "s"}${avg != null ? ` · average ${esc(fmtMoney(avg, cur))} / month in ${year}` : ""}</div>
+          ${missing.length ? `<div class="muted small">Missing this month: ${missing.map(accountName).join(", ")}</div>` : ""}
+          ${Charts.bars({ labels, values: totals, avg, highlight: yearMonths.indexOf(month), fmtTick: fmtTickFor(cur),
+            tips: yearMonths.map((m, i) => tip(m, totals[i])), ariaLabel: "All cards by month" })}
+        </div>
+        <div class="card stack">
+          <div class="label">By owner · ${Calc.monthLabel(month, true)}</div>
+          ${byOwner.map((o) => `
+            <div class="stack" style="gap:6px">
+              <div class="spread"><span>${esc(o.name)}</span><span class="mono">${esc(fmtMoney(o.sum, cur))}</span></div>
+              <div class="bar"><span style="width:${total ? Math.max(o.sum > 0 ? 2 : 0, (o.sum / total) * 100).toFixed(1) : 0}%"></span></div>
+            </div>`).join("")}
+        </div>
+        <div>
+          <div class="group-title"><span class="label">Each card</span></div>
+          <div class="stack">${cardItems}</div>
+        </div>
+        <p class="muted small">Card totals are spending only and never change reachable money or the long-term total.</p>
+      </div>`;
+    Charts.bind($screen);
+    bindCurSeg();
+    const go = (m) => { state.cardMonth = m; const y = window.scrollY; renderCards(); window.scrollTo(0, y); };
+    document.getElementById("cd-month").addEventListener("change", (e) => go(e.target.value));
+    document.getElementById("cd-prev").addEventListener("click", () => go(cardMonths[cardMonths.indexOf(month) + 1]));
+    document.getElementById("cd-next").addEventListener("click", () => go(cardMonths[cardMonths.indexOf(month) - 1]));
   }
+
+  // ---------- Trends ----------
+
+  const PERIODS = { year: "This year", "12m": "12 months", all: "All" };
+  const STACK_TYPES = ["current", "savings", "investment", "crypto", "long_term", "home"];
+
   function renderTrends() {
-    renderPlaceholder("History", "Trends", "Charts of reachable money and the long-term total arrive in a later stage.");
+    const cur = state.displayCur;
+    const period = PERIODS[state.trendPeriod] ? state.trendPeriod : "year";
+    const idx = Calc.indexSnapshots(state.snapshots);
+    const months = Calc.snapshotMonths(state.snapshots, state.accounts);
+    const nowM = Calc.currentMonth();
+    const latestBal = months.balances[0] || null;
+    const firstBal = months.balances[months.balances.length - 1] || null;
+    const end = latestBal && latestBal > nowM ? latestBal : nowM;
+    const start = period === "year" ? `${nowM.slice(0, 4)}-01` : period === "12m" ? Calc.shiftMonth(end, -11) : (firstBal || nowM);
+    const range = Calc.monthRange(start, end);
+    const T = range.map((m) => Calc.monthTotals(state.accounts, idx, m, cur, state.rates, latestBal));
+    const labels = range.map((m) => (period === "year" ? MONTHS[Number(m.slice(5)) - 1] : Calc.monthLabel(m)));
+    const inc = T.map((t) => t.hasBalances && t.incomplete);
+    const series = (field) => T.map((t) => (t.hasBalances ? t[field] : null));
+    const tips = (field) => T.map((t, i) => `${Calc.monthLabel(range[i], true)} · ${t.hasBalances ? fmtMoney(t[field], cur) + (inc[i] ? " · incomplete" : "") : "no balances"}`);
+    const fmtTick = fmtTickFor(cur);
+    const any = T.some((t) => t.hasBalances);
+
+    const legend = STACK_TYPES.map((ty) => `<span class="key"><i style="background:${Charts.TYPE_COLORS[ty]}"></i>${TYPE_LABEL[ty]}</span>`).join("")
+      + `<span class="key"><i style="background:${Charts.TYPE_COLORS.loan}"></i>Loans (below 0)</span>`;
+
+    $screen.innerHTML = `
+      <div class="page-head">
+        <div><div class="label">History</div><h1>Trends</h1></div>
+        ${curSegHtml()}
+      </div>
+      <div class="stack-lg">
+        <div class="seg" id="tr-period">${Object.entries(PERIODS).map(([k, l]) =>
+          `<button type="button" data-period="${k}" aria-pressed="${k === period}">${l.toUpperCase()}</button>`).join("")}</div>
+        ${!any ? `<div class="card empty stack"><p class="muted">No balances in this period yet.</p><a class="btn block" href="#update">Update</a></div>` : `
+        <div class="card stack">
+          <div class="label">Reachable money</div>
+          ${Charts.line({ labels, values: series("reachable"), incomplete: inc, tips: tips("reachable"), fmtTick, ariaLabel: "Reachable money by month" })}
+        </div>
+        <div class="card stack">
+          <div class="label">Long-term total</div>
+          ${Charts.line({ labels, values: series("longTerm"), incomplete: inc, tips: tips("longTerm"), fmtTick, ariaLabel: "Long-term total by month" })}
+        </div>
+        <div class="card stack">
+          <div class="label">By type</div>
+          ${Charts.stacked({
+            labels, fmtTick, incomplete: inc,
+            series: STACK_TYPES.map((ty) => ({ key: ty, color: Charts.TYPE_COLORS[ty], values: T.map((t) => (t.hasBalances ? t.byType[ty] : null)) })),
+            negative: { color: Charts.TYPE_COLORS.loan, values: T.map((t) => (t.hasBalances ? t.byType.loan : null)) },
+            tips: T.map((t, i) => !t.hasBalances ? `${Calc.monthLabel(range[i], true)} · no balances`
+              : `${Calc.monthLabel(range[i], true)} · ${STACK_TYPES.filter((ty) => t.byType[ty]).map((ty) => `${TYPE_LABEL[ty]} ${fmtTick(t.byType[ty])}`).join(" · ")}${t.byType.loan ? ` · Loans −${fmtTick(t.byType.loan)}` : ""}${inc[i] ? " · incomplete" : ""}`),
+            ariaLabel: "Totals by account type",
+          })}
+          <div class="legend">${legend}</div>
+        </div>
+        <p class="muted small">Tap a month to see its values. Hollow dots and dashed lines mark incomplete months (some balances missing); a break in a line is a month with no balances. Each month is converted with its own exchange rate.</p>`}
+      </div>`;
+    Charts.bind($screen);
+    bindCurSeg();
+    document.getElementById("tr-period").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-period]");
+      if (!b) return;
+      state.trendPeriod = b.dataset.period;
+      renderTrends();
+    });
   }
 
   // ---------- money formatting ----------
@@ -561,7 +737,7 @@
     try {
       return new Intl.NumberFormat("en-US", {
         style: "currency", currency: cur, minimumFractionDigits: 0, maximumFractionDigits: decimals ? 2 : 0,
-      }).format(v);
+      }).format(v).replace(/^-/, "−");
     } catch (_) {
       return `${cur} ${Math.round(v).toLocaleString("en-US")}`;
     }
@@ -822,22 +998,55 @@
         <a class="btn block" href="#update">Add the missing balances</a>
       </div>` : "";
 
-    const typeCards = t.hasBalances ? TYPES.filter((ty) => ty !== "card" && t.counts[ty]).map((ty) => {
+    // Long-term view: each long-term type with total, share of assets and change vs the previous month.
+    const LT_TYPES = ["savings", "investment", "crypto", "long_term", "home"];
+    const typeCards = t.hasBalances ? LT_TYPES.filter((ty) => t.counts[ty]).map((ty) => {
       const v = t.byType[ty];
-      const share = ty === "loan" ? null : (t.assets > 0 ? (v / t.assets) * 100 : 0);
+      const share = t.assets > 0 ? (v / t.assets) * 100 : 0;
+      const c = prevT.hasBalances && prevT.counts[ty] ? Calc.change(v, prevT.byType[ty]) : null;
       return `
         <div class="type-card">
           <div class="spread"><span class="label">${TYPE_LABEL[ty]}</span><span class="label">${t.counts[ty]}</span></div>
-          <div class="type-value mono ${ty === "loan" ? "neg" : ""}">${ty === "loan" ? "−" : ""}${fmtMoney(v, cur)}</div>
-          ${share == null ? `<div class="muted small">owed · subtracted</div>`
-            : `<div class="bar"><span style="width:${Math.max(2, Math.min(100, share)).toFixed(1)}%"></span></div><div class="muted small mono">${share.toFixed(1)}% of assets</div>`}
+          <div class="type-value mono">${fmtMoney(v, cur)}</div>
+          <div class="bar"><span style="width:${Math.max(2, Math.min(100, share)).toFixed(1)}%"></span></div>
+          <div class="muted small mono">${share.toFixed(1)}% of assets</div>
+          <div class="small mono ${c ? toneOf(c.amount) : "muted"}">${c ? `${fmtSigned(c.amount, cur)} ${fmtPct(c.pct)}` : `no ${Calc.monthLabel(prevM)} data`}</div>
         </div>`;
     }).join("") : "";
     const cardsCard = t.cardCount ? `
-      <div class="type-card">
+      <a class="type-card" href="#cards">
         <div class="spread"><span class="label">Cards</span><span class="label">${t.cardCount}</span></div>
         <div class="type-value mono">${fmtMoney(t.cards, cur)}</div>
-        <div class="muted small">spending · not in totals</div>
+        <div class="muted small">spending · not in totals ›</div>
+      </a>` : "";
+
+    // Loans: remaining balance and monthly payment, plus the sum of payments across active loans.
+    const loans = state.accounts.filter((a) => lower(a.type) === "loan" && isActive(a));
+    let commitments = 0, commitmentsKnown = true;
+    const loanRows = loans.map((a) => {
+      const own = norm(a.currency).toUpperCase() || "ILS";
+      const b = Calc.balanceFor(a, month, idx);
+      const last = b ? { month, snap: b.snap } : Calc.latestSnapshot(idx, a.id);
+      const remaining = last ? Calc.parseAmount(last.snap.amount) : null;
+      const pay = norm(a.monthly_payment) !== "" ? Calc.parseAmount(a.monthly_payment) : null;
+      if (pay != null && isFinite(pay)) {
+        const pc = Calc.convert(pay, own, cur, state.rates, Calc.currentMonth());
+        if (pc == null) commitmentsKnown = false; else commitments += pc;
+      }
+      return `
+        <li>
+          <div><div>${accountName(a)}</div><div class="muted small">${remaining != null ? `owed ${last.month !== month ? `(${Calc.monthLabel(last.month)})` : ""}` : "no balance yet"}</div></div>
+          <div class="acct-right">
+            <div class="mono neg">${remaining != null && isFinite(remaining) ? "−" + esc(fmtMoney(remaining, own)) : "—"}</div>
+            <div class="acct-orig mono">${pay != null && isFinite(pay) ? `${esc(fmtMoney(pay, own))} / month` : "no payment set"}</div>
+          </div>
+        </li>`;
+    }).join("");
+    const loansCard = loans.length ? `
+      <div class="card stack">
+        <div class="spread"><div class="label">Loans</div><span class="label">${loans.length}</span></div>
+        <ul class="plain-list loan-list">${loanRows}</ul>
+        <div class="spread commit"><span>Fixed monthly commitments</span><span class="mono">${commitmentsKnown ? esc(fmtMoney(commitments, cur)) : "—"}</span></div>
       </div>` : "";
 
     $screen.innerHTML = `${head}
@@ -847,7 +1056,8 @@
         ${rateNoticesHtml(months.all)}
         ${hero}
         ${missing}
-        ${typeCards || cardsCard ? `<div><div class="group-title"><span class="label">By type</span></div><div class="type-grid">${typeCards}${cardsCard}</div></div>` : ""}
+        ${typeCards || cardsCard ? `<div><div class="group-title"><span class="label">Long-term view</span><span class="label">vs ${Calc.monthLabel(prevM)}</span></div><div class="type-grid">${typeCards}${cardsCard}</div></div>` : ""}
+        ${loansCard}
       </div>`;
 
     const go = (m) => { state.ovMonth = m; route(); };
@@ -1356,52 +1566,323 @@
 
   // ---------- Accounts ----------
 
-  function acctCard(a) {
+  // Latest balance of an account with its change from the previous calendar month.
+  function latestInfo(a, idx) {
+    const last = Calc.latestSnapshot(idx, a.id);
+    if (!last) return null;
+    const own = norm(last.snap.currency).toUpperCase() || norm(a.currency).toUpperCase();
+    const amount = Calc.parseAmount(last.snap.amount);
+    const prevSnap = idx.get(norm(a.id), Calc.shiftMonth(last.month, -1));
+    const prev = prevSnap ? Calc.parseAmount(prevSnap.amount) : null;
+    return {
+      month: last.month, snap: last.snap, own, amount,
+      converted: isFinite(amount) ? Calc.convert(amount, own, state.displayCur, state.rates, last.month) : null,
+      delta: prev != null && isFinite(prev) && isFinite(amount) ? Calc.change(amount, prev) : null,
+      asOf: Calc.normDate(last.snap.as_of_date),
+    };
+  }
+
+  function shortDate(d) {
+    if (!d) return "";
+    const [, m, day] = d.split("-").map(Number);
+    return `${day} ${MONTHS[m - 1]}`;
+  }
+
+  function acctCard(a, idx) {
     const type = lower(a.type);
-    const bits = [TYPE_LABEL[type] || type, norm(a.currency), norm(a.owner), norm(a.country)].filter(Boolean);
+    const info = idx ? latestInfo(a, idx) : null;
+    const cur = state.displayCur;
+    const bits = [TYPE_LABEL[type] || type, norm(a.owner)];
+    if (info) bits.push(type === "card" ? `${Calc.monthLabel(info.month)} total` : `upd ${shortDate(info.asOf) || Calc.monthLabel(info.month)}`);
+    else bits.push("no balance yet");
+    let right = "";
+    if (info && isFinite(info.amount)) {
+      const main = info.converted != null ? fmtMoney(info.converted, cur) : fmtMoney(info.amount, info.own);
+      right = `
+        <div class="acct-right">
+          <div class="acct-amount mono ${type === "loan" ? "neg" : ""}">${type === "loan" ? "−" : ""}${esc(main)}</div>
+          ${info.own !== cur ? `<div class="acct-orig mono">${esc(fmtMoney(info.amount, info.own))}</div>` : ""}
+          ${info.delta ? `<div class="acct-chg mono ${toneOf(type === "loan" ? -info.delta.amount : info.delta.amount)}">${fmtSigned(info.delta.amount, info.own)}</div>` : ""}
+        </div>`;
+    }
     return `
       <button class="acct ${isActive(a) ? "" : "inactive"}" data-acct="${esc(a.id)}">
         <div class="dot">${esc(norm(a.currency).toUpperCase() || "—")}</div>
         <div class="body">
           <div class="name">${esc(a.nickname || a.id)}</div>
-          <div class="meta">${bits.map(esc).join(" · ")}</div>
+          <div class="meta">${bits.filter(Boolean).map(esc).join(" · ")}</div>
         </div>
-        <span class="chev">›</span>
+        ${right || `<span class="chev">›</span>`}
       </button>`;
   }
 
+  // Net of the latest balances (assets minus loans), cards left out.
+  function groupNet(list, idx) {
+    let net = 0, any = false;
+    list.forEach((a) => {
+      const type = lower(a.type);
+      if (type === "card") return;
+      const info = latestInfo(a, idx);
+      if (!info || info.converted == null) return;
+      any = true;
+      net += type === "loan" ? -info.converted : info.converted;
+    });
+    return any ? net : null;
+  }
+
+  function curSegHtml() {
+    return `<div class="seg seg-sm" data-cur-seg>${CURRENCIES.map((c) =>
+      `<button type="button" data-cur="${c}" aria-pressed="${c === state.displayCur}">${c}</button>`).join("")}</div>`;
+  }
+  function bindCurSeg() {
+    const seg = $screen.querySelector("[data-cur-seg]");
+    if (!seg) return;
+    seg.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-cur]");
+      if (!b || b.dataset.cur === state.displayCur) return;
+      state.displayCur = b.dataset.cur;
+      LS.set("fd.displayCurrency", state.displayCur);
+      const y = window.scrollY;
+      route();
+      window.scrollTo(0, y);
+    });
+  }
+
+  function fmtTickFor(cur) {
+    return (v) => {
+      try {
+        return new Intl.NumberFormat("en-US", { style: "currency", currency: cur, notation: "compact", maximumFractionDigits: 1 }).format(v);
+      } catch (_) { return String(Math.round(v)); }
+    };
+  }
+
+  const GROUPINGS = { institution: "Bank", country: "Country", owner: "Owner" };
+
   function renderAccounts() {
+    const idx = Calc.indexSnapshots(state.snapshots);
+    const cur = state.displayCur;
+    const grouping = GROUPINGS[LS.get("fd.acctGroup")] ? LS.get("fd.acctGroup") : "institution";
     const active = state.accounts.filter(isActive);
     const inactive = state.accounts.filter((a) => !isActive(a));
-    const groups = {};
-    active.forEach((a) => {
-      const k = norm(a.institution) || "No institution";
-      (groups[k] = groups[k] || []).push(a);
-    });
-    const names = Object.keys(groups).sort((x, y) => x.localeCompare(y));
+    let groups;
+    if (grouping === "owner") {
+      // Exactly three groups: the two people and Joint.
+      const names = [...personNames(), JOINT];
+      groups = names.map((n) => ({ name: n, list: [] }));
+      active.forEach((a) => {
+        const n = matchName(a.owner, names) || JOINT;
+        groups.find((g) => g.name === n).list.push(a);
+      });
+    } else {
+      const map = {};
+      active.forEach((a) => {
+        const k = norm(a[grouping]) || (grouping === "country" ? "No country" : "No institution");
+        (map[k] = map[k] || []).push(a);
+      });
+      groups = Object.keys(map).sort((x, y) => x.localeCompare(y)).map((n) => ({ name: n, list: map[n] }));
+    }
+    const sortList = (list) => list.sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname)));
     $screen.innerHTML = `
       <div class="page-head">
         <div><div class="label">${active.length} active</div><h1>Accounts</h1></div>
+        ${curSegHtml()}
       </div>
-      <div class="row" style="margin-bottom:8px">
-        <button class="btn primary" id="acct-add" style="flex:1">+ Add</button>
-        <button class="btn" id="acct-bulk" style="flex:1">Bulk add</button>
+      <div class="stack">
+        <div class="row">
+          <button class="btn primary" id="acct-add" style="flex:1">+ Add</button>
+          <button class="btn" id="acct-bulk" style="flex:1">Bulk add</button>
+        </div>
+        <div class="seg" id="acct-group">${Object.entries(GROUPINGS).map(([k, l]) =>
+          `<button type="button" data-group="${k}" aria-pressed="${k === grouping}">${l.toUpperCase()}</button>`).join("")}</div>
       </div>
-      ${!active.length ? `<div class="card empty stack"><p class="muted">No accounts yet. Add one, or paste many at once with Bulk add.</p></div>` : ""}
-      ${names.map((n) => `
-        <div class="group-title"><span class="label">${esc(n)}</span><span class="label">${groups[n].length}</span></div>
-        <div class="stack">${groups[n].sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname))).map(acctCard).join("")}</div>`).join("")}
+      ${!active.length ? `<div class="card empty stack" style="margin-top:16px"><p class="muted">No accounts yet. Add one, or paste many at once with Bulk add.</p></div>` : ""}
+      ${active.length ? groups.map((g) => {
+        const net = groupNet(g.list, idx);
+        return `
+        <div class="group-title">
+          <span class="label">${esc(g.name)} · ${g.list.length}</span>
+          <span class="label">${net != null ? `net ${esc(fmtMoney(net, cur))}` : ""}</span>
+        </div>
+        <div class="stack">${g.list.length ? sortList(g.list).map((a) => acctCard(a, idx)).join("")
+          : `<p class="muted small" style="padding:0 4px">No accounts.</p>`}</div>`;
+      }).join("") : ""}
       ${inactive.length ? `
         <details style="margin-top:28px">
           <summary class="group-title"><span class="label">Inactive (${inactive.length}) ▾</span></summary>
-          <div class="stack">${inactive.map(acctCard).join("")}</div>
-        </details>` : ""}`;
+          <div class="stack">${inactive.map((a) => acctCard(a, idx)).join("")}</div>
+        </details>` : ""}
+      ${active.length ? `<p class="muted small" style="margin-top:16px">Latest balance of each account in ${cur}, converted with that month's rate. Group totals are net (loans subtracted) and leave out cards.</p>` : ""}`;
     document.getElementById("acct-add").addEventListener("click", () => openAccountForm(null));
     document.getElementById("acct-bulk").addEventListener("click", openBulk);
+    document.getElementById("acct-group").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-group]");
+      if (!b) return;
+      LS.set("fd.acctGroup", b.dataset.group);
+      renderAccounts();
+    });
+    bindCurSeg();
     $screen.querySelectorAll("[data-acct]").forEach((b) => b.addEventListener("click", () => {
       const a = state.accounts.find((x) => String(x.id) === b.dataset.acct);
-      if (a) openAccountForm(a);
+      if (a) openAccountDetail(a);
     }));
+  }
+
+  // ---------- Account detail: history, chart, edit/delete snapshots ----------
+
+  function openAccountDetail(a) {
+    const idx = Calc.indexSnapshots(state.snapshots);
+    const type = lower(a.type);
+    const own = norm(a.currency).toUpperCase() || "ILS";
+    const list = (idx.byAccount.get(norm(a.id)) || []).slice();
+    const info = latestInfo(a, idx);
+    let chart = "";
+    if (list.length) {
+      const months = Calc.monthRange(list[0].month, list[list.length - 1].month);
+      const values = months.map((m) => { const s = idx.get(norm(a.id), m); const v = s ? Calc.parseAmount(s.amount) : null; return v != null && isFinite(v) ? v : null; });
+      const tips = months.map((m, i) => `${Calc.monthLabel(m, true)} · ${values[i] != null ? fmtMoney(values[i], own, true) : "no balance"}`);
+      const labels = months.map((m) => Calc.monthLabel(m));
+      chart = type === "card"
+        ? Charts.bars({ labels, values, tips, fmtTick: fmtTickFor(own), ariaLabel: "Monthly totals" })
+        : Charts.line({ labels, values, tips, fmtTick: fmtTickFor(own), ariaLabel: "Balance history" });
+    }
+    const linked = type === "card" && norm(a.linked_account) ? state.accounts.find((x) => x.id === norm(a.linked_account)) : null;
+    openSheet(`
+      <div class="stack-lg">
+        <div class="spread">
+          <div><div class="label">${esc(TYPE_LABEL[type] || type)} · ${esc(a.institution)}</div><h2>${accountName(a)}</h2></div>
+          <button type="button" class="icon-btn" data-close aria-label="Close">✕</button>
+        </div>
+        <div class="card stack">
+          <div class="label">${info ? (type === "card" ? `${Calc.monthLabel(info.month, true)} total` : `Latest · ${Calc.monthLabel(info.month, true)}`) : "No balance yet"}</div>
+          <div class="mid-number ${type === "loan" ? "neg" : ""}">${info ? `${type === "loan" ? "−" : ""}${esc(fmtMoney(info.amount, own, true))}` : "—"}</div>
+          ${info && own !== state.displayCur && info.converted != null ? `<div class="muted mono small">≈ ${esc(fmtMoney(info.converted, state.displayCur))}</div>` : ""}
+          ${info && info.delta ? `<div class="mono small ${toneOf(type === "loan" ? -info.delta.amount : info.delta.amount)}">${fmtSigned(info.delta.amount, own)} ${fmtPct(info.delta.pct)} vs ${Calc.monthLabel(Calc.shiftMonth(info.month, -1))}</div>` : ""}
+          ${type === "loan" && norm(a.monthly_payment) !== "" ? `<div class="muted small">Monthly payment: <span class="mono">${esc(fmtMoney(Calc.parseAmount(a.monthly_payment), own))}</span></div>` : ""}
+          ${type === "card" ? `<div class="muted small">Paid from: ${linked ? accountName(linked) : "not set"}</div>` : ""}
+          <div class="muted small">${esc(a.owner)} · updated by ${esc(a.updater)}${norm(a.update_day) !== "" ? ` · due day ${esc(a.update_day)}` : ""}${type === "home" && a.update_month ? ` of ${MONTHS[Number(a.update_month) - 1] || ""}` : ""}${isActive(a) ? "" : " · inactive"}</div>
+        </div>
+        ${chart ? `<div class="card tight">${chart}</div>` : ""}
+        <div class="row">
+          <button class="btn primary" id="ad-add" style="flex:1">Add balance</button>
+          <button class="btn" id="ad-edit" style="flex:1">Edit account</button>
+        </div>
+        <div>
+          <div class="group-title"><span class="label">History</span><span class="label">${list.length}</span></div>
+          ${list.length ? `<div class="stack">${list.slice().reverse().map(({ month, snap }) => `
+            <div class="hist-row">
+              <div class="spread">
+                <span class="mono">${Calc.monthLabel(month, true)}</span>
+                <span class="mono hist-amount">${esc(fmtMoney(Calc.parseAmount(snap.amount), norm(snap.currency).toUpperCase() || own, true))}</span>
+              </div>
+              <div class="spread">
+                <span class="muted small">${esc(snap.as_of_date ? `as of ${Calc.normDate(snap.as_of_date) || snap.as_of_date}` : "")}${snap.source ? ` · ${esc(snap.source)}` : ""}${snap.entered_by ? ` · ${esc(snap.entered_by)}` : ""}</span>
+                <span class="row">
+                  <button class="btn small" data-snap-edit="${esc(month)}">Edit</button>
+                  <button class="btn small danger" data-snap-del="${esc(month)}">Delete</button>
+                </span>
+              </div>
+            </div>`).join("")}</div>` : `<p class="muted">No balances yet.</p>`}
+        </div>
+        <p class="err-text" id="ad-err"></p>
+      </div>`);
+    Charts.bind($sheetBody);
+    document.getElementById("ad-edit").addEventListener("click", () => openAccountForm(a));
+    document.getElementById("ad-add").addEventListener("click", () => {
+      state.updateMode = "manual";
+      state.manualDraft = { account_id: a.id, month: Calc.currentMonth(), as_of_date: Calc.today() };
+      state.manualShowAll = true;
+      closeSheet();
+      if (currentRoute() === "update") route(); else location.hash = "update";
+    });
+    $sheetBody.querySelectorAll("[data-snap-edit]").forEach((b) => b.addEventListener("click", () => {
+      openSnapshotEditor(a, idx.get(norm(a.id), b.dataset.snapEdit));
+    }));
+    $sheetBody.querySelectorAll("[data-snap-del]").forEach((b) => b.addEventListener("click", async () => {
+      const month = b.dataset.snapDel;
+      if (!confirm(`Delete the ${Calc.monthLabel(month, true)} balance of "${norm(a.nickname) || a.id}"? This removes the row from the sheet.`)) return;
+      setBusy(b, true, "…");
+      try {
+        await guarded(() => deleteSnapshot(a, month, idx.get(norm(a.id), month)));
+        toast("Balance deleted");
+        openAccountDetail(a);
+        refreshBehindSheet();
+      } catch (e) {
+        document.getElementById("ad-err").textContent = friendlyError(e);
+        setBusy(b, false);
+      }
+    }));
+  }
+
+  // Finds a snapshot again after a fresh read: by id, or by account and month when it has no id.
+  async function findSnapshotFresh(a, month, snap) {
+    await reloadSnapshots();
+    const id = snap && norm(snap.id);
+    const found = state.snapshots.find((s) => (id ? norm(s.id) === id
+      : norm(s.account_id) === norm(a.id) && Calc.normMonth(s.month) === month));
+    if (!found || norm(found.account_id) !== norm(a.id) || Calc.normMonth(found.month) !== month) {
+      throw new Error("That balance changed in the sheet meanwhile. Please look again.");
+    }
+    return found;
+  }
+
+  async function deleteSnapshot(a, month, snap) {
+    const found = await findSnapshotFresh(a, month, snap);
+    await Sheets.deleteRows("Snapshots", [found._row]);
+    await reloadSnapshots();
+  }
+
+  function openSnapshotEditor(a, snap) {
+    const month = Calc.normMonth(snap.month);
+    const own = norm(snap.currency).toUpperCase() || norm(a.currency).toUpperCase();
+    openSheet(`
+      <form id="se-form" class="stack-lg" novalidate>
+        <div class="spread">
+          <div><div class="label">${accountName(a)}</div><h2>${Calc.monthLabel(month, true)}</h2></div>
+          <button type="button" class="icon-btn" data-close aria-label="Close">✕</button>
+        </div>
+        <div class="field"><label class="label" for="se-amount">Amount (${esc(own)})</label>
+          <input id="se-amount" type="text" inputmode="decimal" value="${esc(snap.amount)}"></div>
+        <div class="field"><label class="label" for="se-date">As-of date</label>
+          <input id="se-date" type="date" value="${esc(Calc.normDate(snap.as_of_date) || "")}"></div>
+        <p class="err-text" id="se-err"></p>
+        <button class="btn primary block" type="submit">Save</button>
+        <button class="btn ghost block" type="button" id="se-back">Back</button>
+      </form>`);
+    document.getElementById("se-back").addEventListener("click", () => openAccountDetail(a));
+    document.getElementById("se-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const $err = document.getElementById("se-err");
+      const amount = Calc.parseAmount(document.getElementById("se-amount").value);
+      const date = Calc.normDate(document.getElementById("se-date").value);
+      if (!isFinite(amount) || amount < 0) { $err.textContent = "Enter a positive number."; return; }
+      if (!date) { $err.textContent = "Choose the as-of date."; return; }
+      if (date > Calc.today()) { $err.textContent = "The as-of date is in the future."; return; }
+      const btn = e.target.querySelector('[type="submit"]');
+      setBusy(btn, true, "Saving…");
+      try {
+        await guarded(async () => {
+          const found = await findSnapshotFresh(a, month, snap);
+          const values = { amount, as_of_date: date, entered_by: state.me.name, entered_at: new Date().toISOString() };
+          await Sheets.setCells("Snapshots", state.snapHeader,
+            Object.entries(values).map(([field, value]) => ({ row: found._row, field, value })), "RAW");
+          await reloadSnapshots();
+        });
+        toast("Balance updated");
+        openAccountDetail(a);
+        refreshBehindSheet();
+      } catch (ex) {
+        $err.textContent = friendlyError(ex);
+        setBusy(btn, false);
+      }
+    });
+  }
+
+  // Redraws the screen under an open panel so it reflects a change made in the panel.
+  function refreshBehindSheet() {
+    const y = window.scrollY;
+    const r = currentRoute();
+    if (SUBSCREENS[r]) SUBSCREENS[r].render(); else TABS.find((t) => t.id === r).render();
+    window.scrollTo(0, y);
   }
 
   function options(list, selected, placeholder) {
