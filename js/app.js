@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.02-16";
+  const APP_VERSION = "2026.10.02-17";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "loan", "home", "card"];
@@ -874,12 +874,13 @@
           const f = shareOf(p);
           const by = p.kind === "loan" ? paidFromName(norm(p.account.linked_account)) : paidFromName(p.paid_from);
           const sign = p.income ? "+" : "";
-          return `<li>
-            <div><div>${esc(p.name)}</div><div class="muted small">${p.kind === "loan" ? "loan payment" : `${p.income ? "income · " : ""}${esc(p.owner || JOINT)}`}${p.day ? ` · day ${esc(p.day)}` : ""}${by ? ` · ${p.income ? "into" : "from"} ${by}` : ""}${f === 0.5 ? " · your 50%" : f === 0 ? " · not yours" : ""}</div></div>
+          return `<li ${p.kind === "fixed" ? `class="tap" data-fx-month="${esc(p.id)}"` : ""}>
+            <div><div>${esc(p.name)}${p.oneMonth ? ` <span class="chip warn">this month only</span>` : ""}</div><div class="muted small">${p.kind === "loan" ? "loan payment" : `${p.income ? "income · " : ""}${esc(p.owner || JOINT)}`}${p.day ? ` · day ${esc(p.day)}` : ""}${by ? ` · ${p.income ? "into" : "from"} ${by}` : ""}${f === 0.5 ? " · your 50%" : f === 0 ? " · not yours" : ""}</div></div>
             <div class="acct-right"><div class="mono ${p.income ? "pos" : ""}">${sign}${esc(fmtMoney(p.amount, p.currency))}</div>
               ${f === 0.5 ? `<div class="acct-orig mono">${sign}${esc(fmtMoney(p.amount / 2, p.currency))}</div>` : ""}</div>
           </li>`;
         }).join("")}</ul>
+        <p class="muted small">Tap a payment to change its amount for ${esc(Calc.monthLabel(month, true))} only.</p>
         <div class="spread commit"><span>My fixed payments</span><span class="mono">${esc(fmtMoney(myFixedM || 0, cur))}</span></div>
         ${myIncomeM ? `<div class="spread"><span>My fixed income</span><span class="mono pos">+${esc(fmtMoney(myIncomeM, cur))}</span></div>` : ""}`
         : `<p class="muted">No fixed payments for this month. Add rent, parking and similar under Manage.</p>`}
@@ -1010,6 +1011,7 @@
     Charts.bind($screen);
     bindCurSeg();
     const go = (m) => { state.cardMonth = m; const y = window.scrollY; renderCards(); window.scrollTo(0, y); };
+    $screen.querySelectorAll("[data-fx-month]").forEach((li) => li.addEventListener("click", () => openMonthOverride(li.dataset.fxMonth, month)));
     document.getElementById("sp-view").addEventListener("click", (e) => {
       const b = e.target.closest("[data-view]");
       if (!b) return;
@@ -1064,6 +1066,65 @@
     }));
   }
 
+  // Saves (or, with amount null, removes) a one-month exception for a fixed payment.
+  async function saveMonthOverride(id, month, amount) {
+    await loadFixed();
+    const s = Calc.fixedSeries(plainFixed()).find((x) => x.id === id);
+    if (!s) throw new Error("This payment changed in the sheet meanwhile. Please look again.");
+    const existing = s.overrides.get(month);
+    if (amount == null) {
+      if (existing) await Sheets.deleteRows("Fixed", [existing.row._row]);
+    } else if (existing) {
+      await Sheets.setCells("Fixed", (await Sheets.readTab("Fixed")).header, [{ row: existing.row._row, field: "amount", value: amount }], "RAW");
+    } else {
+      const h = s.head;
+      await Sheets.appendRows("Fixed", [{
+        id: s.id, name: h.name, amount, currency: norm(h.currency).toUpperCase() || "ILS", owner: h.owner, paid_from: h.paid_from,
+        day: h.day, from_month: month, to_month: "", notes: "", loan_id: "", direction: norm(h.direction), one_month: "yes",
+      }]);
+    }
+    await loadFixed();
+  }
+
+  function openMonthOverride(id, month) {
+    const s = Calc.fixedSeries(plainFixed()).find((x) => x.id === id);
+    if (!s) return;
+    const base = s.versions.filter((x) => x.from <= month).pop();
+    const ex = s.overrides.get(month);
+    const cur = norm(s.head.currency).toUpperCase() || "ILS";
+    const normal = base ? Calc.parseAmount(base.row.amount) : null;
+    openSheet(`
+      <div class="stack-lg">
+        <div class="spread"><div><div class="label">${esc(Calc.monthLabel(month, true))} only</div><h2>${esc(s.head.name || s.id)}</h2></div>
+          <button type="button" class="icon-btn" data-close aria-label="Close">✕</button></div>
+        <p class="muted">Usually <span class="mono">${esc(fmtMoney(normal, cur, true))}</span> a month. Enter a different amount for ${esc(Calc.monthLabel(month, true))} only; the months before and after stay as they are. Use 0 if there was no ${lower(s.head.direction) === "in" ? "income" : "payment"} that month.</p>
+        <div class="field"><label class="label" for="mo-amount">Amount for ${esc(Calc.monthLabel(month, true))} (${esc(cur)})</label>
+          <input id="mo-amount" type="text" inputmode="decimal" value="${ex ? esc(ex.row.amount) : ""}" placeholder="${esc(normal != null ? normal : "")}"></div>
+        <p class="err-text" id="mo-err"></p>
+        <button class="btn primary block" id="mo-save">Save for ${esc(Calc.monthLabel(month, true))} only</button>
+        ${ex ? `<button class="btn block" id="mo-remove">Remove the exception (back to ${esc(fmtMoney(normal, cur, true))})</button>` : ""}
+      </div>`);
+    const run = async (btn, amount, msg) => {
+      setBusy(btn, true, "Saving…");
+      try {
+        await guarded(() => saveMonthOverride(id, month, amount));
+        closeSheet();
+        toast(msg);
+        route();
+      } catch (e) {
+        document.getElementById("mo-err").textContent = friendlyError(e);
+        setBusy(btn, false);
+      }
+    };
+    document.getElementById("mo-save").addEventListener("click", (e) => {
+      const v = Calc.parseAmount(document.getElementById("mo-amount").value);
+      if (!isFinite(v) || v < 0) { document.getElementById("mo-err").textContent = "Enter an amount (0 or more)."; return; }
+      run(e.target, v, `${Calc.monthLabel(month, true)}: ${fmtMoney(v, cur)}`);
+    });
+    const rm = document.getElementById("mo-remove");
+    if (rm) rm.addEventListener("click", () => run(rm, null, "Exception removed"));
+  }
+
   function openFixedForm(series) {
     const isNew = !series;
     const h = series ? series.head : { owner: JOINT, currency: "ILS" };
@@ -1104,7 +1165,22 @@
             <div class="field"><label class="label" for="fx-new-from">From month</label><input id="fx-new-from" type="month" value="${Calc.shiftMonth(nowM, 1)}"></div>
           </div>
           <button class="btn block" type="button" id="fx-change">Save new amount</button>
-          <div class="label" style="margin-top:6px">History</div>
+        </div>
+        <div class="card stack">
+          <div class="label">One month only</div>
+          <p class="muted small">A different amount for a single month (e.g. 350 instead of 550 in November). The months after go back to the normal amount. 0 = nothing that month.</p>
+          <div class="field-row">
+            <div class="field"><label class="label" for="fx-one-amount">Amount (${esc(cur)})</label><input id="fx-one-amount" type="text" inputmode="decimal" placeholder="350"></div>
+            <div class="field"><label class="label" for="fx-one-month">Month</label><input id="fx-one-month" type="month" value="${Calc.shiftMonth(nowM, 1)}"></div>
+          </div>
+          <button class="btn block" type="button" id="fx-one-save">Save for that month only</button>
+          ${series.overrides.size ? `<ul class="plain-list">${[...series.overrides.values()].sort((x, y) => y.from.localeCompare(x.from)).map((o) => `
+            <li><span class="mono">Only ${Calc.monthLabel(o.from, true)}</span>
+              <span class="row"><span class="mono">${esc(fmtMoney(Calc.parseAmount(o.row.amount), cur, true))}</span>
+              <button type="button" class="btn small danger" data-fx-one-del="${esc(o.from)}">Delete</button></span></li>`).join("")}</ul>` : ""}
+        </div>
+        <div class="card stack">
+          <div class="label">History</div>
           <ul class="plain-list">${series.versions.slice().reverse().map((v) => `
             <li><span class="mono">From ${Calc.monthLabel(v.from, true)}</span>
               <span class="row"><span class="mono">${esc(fmtMoney(Calc.parseAmount(v.row.amount), cur, true))}</span>
@@ -1166,7 +1242,7 @@
         run(btn, "Saving…", async () => {
           const s = await freshSeries();
           const cells = [];
-          s.versions.forEach((ver) => Object.entries(details).forEach(([field, value]) => cells.push({ row: ver.row._row, field, value })));
+          [...s.versions, ...s.overrides.values()].forEach((ver) => Object.entries(details).forEach(([field, value]) => cells.push({ row: ver.row._row, field, value })));
           await Sheets.setCells("Fixed", (await Sheets.readTab("Fixed")).header, cells, "RAW");
         }, "Saved");
       }
@@ -1193,6 +1269,16 @@
         }
       }, `New amount from ${Calc.monthLabel(from, true)}`);
     });
+    document.getElementById("fx-one-save").addEventListener("click", (e) => {
+      const amount = Calc.parseAmount(v("fx-one-amount"));
+      const month = Calc.normMonth(v("fx-one-month"));
+      if (!isFinite(amount) || amount < 0) { $err().textContent = "Enter the amount for that month (0 or more)."; return; }
+      if (!month) { $err().textContent = "Choose the month."; return; }
+      run(e.target, "Saving…", () => saveMonthOverride(series.id, month, amount), `${Calc.monthLabel(month, true)} only: ${fmtMoney(amount, norm(series.head.currency).toUpperCase() || "ILS")}`);
+    });
+    $sheetBody.querySelectorAll("[data-fx-one-del]").forEach((b) => b.addEventListener("click", () => {
+      run(b, "…", () => saveMonthOverride(series.id, b.dataset.fxOneDel, null), "Exception removed");
+    }));
     $sheetBody.querySelectorAll("[data-fx-del]").forEach((b) => b.addEventListener("click", () => {
       const from = b.dataset.fxDel;
       if (!confirm(`Delete the amount that starts in ${Calc.monthLabel(from, true)}?`)) return;

@@ -328,20 +328,24 @@
   // ---------- fixed payments ----------
 
   // Groups Fixed rows by id: [{ id, versions: [{ row, from }] ascending, stop, head }].
+  // Rows marked one_month are exceptions for a single month: { month: { row, from } } in `overrides`.
+  const isOneMonth = (r) => /^(yes|true|1|y)$/i.test(norm(r.one_month));
   function fixedSeries(rows) {
     const map = new Map();
     rows.forEach((r) => {
       const id = norm(r.id);
       const from = normMonth(r.from_month);
       if (!id || !from) return;
-      if (!map.has(id)) map.set(id, []);
-      map.get(id).push({ row: r, from });
+      if (!map.has(id)) map.set(id, { versions: [], overrides: new Map() });
+      if (isOneMonth(r)) map.get(id).overrides.set(from, { row: r, from });
+      else map.get(id).versions.push({ row: r, from });
     });
     const out = [];
-    map.forEach((versions, id) => {
+    map.forEach(({ versions, overrides }, id) => {
+      if (!versions.length) return;
       versions.sort((a, b) => a.from.localeCompare(b.from));
       const stop = versions.map((v) => normMonth(v.row.to_month)).filter(Boolean).sort().pop() || null;
-      out.push({ id, versions, stop, head: versions[versions.length - 1].row });
+      out.push({ id, versions, overrides, stop, head: versions[versions.length - 1].row });
     });
     return out.sort((a, b) => norm(a.head.name).localeCompare(norm(b.head.name)));
   }
@@ -351,8 +355,9 @@
     const out = [];
     fixedSeries(rows).forEach((s) => {
       if (s.stop && month > s.stop) return;
-      const v = s.versions.filter((x) => x.from <= month).pop();
-      if (!v) return;
+      const base = s.versions.filter((x) => x.from <= month).pop();
+      if (!base) return;
+      const v = s.overrides.get(month) || base; // a one-month exception wins for its month
       const amount = parseAmount(v.row.amount);
       if (!isFinite(amount)) return;
       out.push({
@@ -360,7 +365,7 @@
         currency: (norm(v.row.currency) || norm(s.head.currency)).toUpperCase() || "ILS",
         owner: norm(s.head.owner), paid_from: norm(s.head.paid_from), day: norm(s.head.day),
         income: lower(s.head.direction) === "in",
-        since: v.from, series: s,
+        since: base.from, series: s, oneMonth: s.overrides.has(month),
       });
     });
     return out;

@@ -30,7 +30,7 @@ Create these tabs with these exact headers if they are missing; never overwrite 
 | Goals | id, name, target_amount, currency, account_ids, active |
 | Rates | month, usd_ils, eur_ils |
 | Settings | key, value |
-| Fixed | id, name, amount, currency, owner, paid_from, day, from_month, to_month, notes, loan_id, direction *(added after Stage 4, see changes 6, 8 and 9)* |
+| Fixed | id, name, amount, currency, owner, paid_from, day, from_month, to_month, notes, loan_id, direction, one_month *(added after Stage 4, see changes 6, 8, 9 and 12)* |
 
 Rules:
 
@@ -152,6 +152,8 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 10. **"How this is calculated" for reachable money** (added while checking a reported total). Under "My reachable money" on the Overview, an expandable list shows every bank account (type current) for the selected month: owner, share (100% / 50% / 0%), the full balance and the amount counted. It flags a missing balance for that month, and an owner that matches neither person nor Joint (such an account is counted as Joint, at 50%, until its owner is fixed in Edit account). The "Counted for you" line equals the headline figure.
 
 11. **Passive income KPI** (requested after change 9). On the Spending top card, when there is fixed income: **Passive income covers X% of spending**, for the selected month and for the year so far (January up to the selected month). Coverage = my fixed income ÷ my spending, where spending = cards + fixed payments + loan payments, all at the personal share. Each figure has a bar. A note warns when card totals are missing for the month, since that makes the share look higher.
+
+12. **One-month exceptions for fixed payments and income** (requested after change 11). A Fixed row with `one_month` = `yes` sets the amount for its `from_month` only. The regular amount history is unchanged and applies again the next month, and 0 means nothing that month. Set it by tapping a fixed payment in the Spending month list (for that month), or from Manage → payment → "One month only" (any month, including future ones). Exceptions are listed there with Delete. Editing a payment's details updates its exception rows too. Exceptions are marked "this month only" in the Spending list. They don't apply to loan payment history.
 
 ## How to work
 
