@@ -30,7 +30,7 @@ Create these tabs with these exact headers if they are missing; never overwrite 
 | Goals | id, name, target_amount, currency, account_ids, active |
 | Rates | month, usd_ils, eur_ils |
 | Settings | key, value |
-| Fixed | id, name, amount, currency, owner, paid_from, day, from_month, to_month, notes, loan_id *(added after Stage 4, see changes 6 and 8)* |
+| Fixed | id, name, amount, currency, owner, paid_from, day, from_month, to_month, notes, loan_id, direction *(added after Stage 4, see changes 6, 8 and 9)* |
 
 Rules:
 
@@ -146,6 +146,8 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 7. **Spending chart: Summary / Detail** (requested after change 6). A switch above the Spending chart, remembered on the device (`fd.spendDetail`). **Summary** stacks cards against fixed payments. **Detail** stacks one series per card, per fixed payment and per loan payment, all at the personal share. Order is fixed (cards, then fixed payments, then loans, each by name) so an item keeps its colour. Colours come from the validated categorical palette (`Charts.SERIES_COLORS`). With more than eight items, the smallest by year total fold into "Other". Tapping a month lists each item's amount. The chart opens on the selected month.
 
 8. **Loan details** (requested after change 6). For a loan (type loan), the account form adds **First payment month** (`loan_start`) and **Original loan amount** (`original_amount`). The monthly payment counts in Spending and the Overview from `loan_start` (or, if empty, from the loan's first balance month). For a deactivated loan it counts only up to its last balance. **Payment history:** on the loan's detail screen, "Change the payment" records a new amount from a chosen month as a row in the Fixed tab with `loan_id` = the account id (id `loan-<account id>`). The first change also records the old payment from the first payment month. Earlier months keep the old amount, and the earliest recorded amount also covers months before it. The account's `monthly_payment` is kept equal to the payment in force this month, and is read-only in the form once a history exists. Loan rows never appear in the Fixed payments list. When the original amount is set, the detail screen and the Overview show **paid off** = original − latest remaining balance, as an amount and percentage.
+
+9. **Fixed income** (requested after change 8). A fixed payment can be **Income (in)**, `direction` = `in`, for money received every month, such as renting out a parking spot. It has the same amount history, owner share (Joint 50%) and end month as other fixed payments, and its bank account means "paid into". On **Spending**, income is listed in green with "+". The top card adds **Fixed income** and **Net spending** = my spending − my fixed income. The chart draws income below zero in both Summary and Detail. On the **Overview**, fixed monthly commitments = loan payments + fixed payments − fixed income, labelled "(after income)". Income never changes reachable money or the long-term total.
 
 ## How to work
 

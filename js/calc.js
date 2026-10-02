@@ -359,6 +359,7 @@
         id: s.id, name: norm(s.head.name) || s.id, amount,
         currency: (norm(v.row.currency) || norm(s.head.currency)).toUpperCase() || "ILS",
         owner: norm(s.head.owner), paid_from: norm(s.head.paid_from), day: norm(s.head.day),
+        income: lower(s.head.direction) === "in",
         since: v.from, series: s,
       });
     });

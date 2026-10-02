@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.02-13";
+  const APP_VERSION = "2026.10.02-14";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "loan", "home", "card"];
@@ -786,9 +786,10 @@
       ...Calc.fixedForMonth(plainFixed(), m).map((p) => ({ ...p, kind: "fixed" })),
       ...loanPaymentsFor(m, idx).map((p) => ({ ...p, kind: "loan" })),
     ];
-    const fixedTotal = (m, household) => {
+    // Payments out (fixed + loans) or, with income = true, fixed money received.
+    const fixedTotal = (m, household, income) => {
       let sum = 0, any = false;
-      fixedItems(m).forEach((p) => {
+      fixedItems(m).filter((p) => !!p.income === !!income).forEach((p) => {
         const f = household ? 1 : shareOf(p);
         if (!f) return;
         const v = conv(p.amount, p.currency, m);
@@ -804,6 +805,8 @@
     const totals = yearMonths.map((m, i) => sumOrNull(cardSeries[i], fixedSeriesV[i]));
     const myCardsM = cardsTotal(month, false);
     const myFixedM = fixedTotal(month, false);
+    const incomeSeries = yearMonths.map((m) => fixedTotal(m, false, true));
+    const myIncomeM = fixedTotal(month, false, true);
     const total = sumOrNull(myCardsM, myFixedM);
     const household = sumOrNull(cardsTotal(month, true), fixedTotal(month, true));
     const avg = avgOf(totals);
@@ -834,13 +837,15 @@
         ${fixedList.length ? `<ul class="plain-list loan-list">${fixedList.map((p) => {
           const f = shareOf(p);
           const by = p.kind === "loan" ? paidFromName(norm(p.account.linked_account)) : paidFromName(p.paid_from);
+          const sign = p.income ? "+" : "";
           return `<li>
-            <div><div>${esc(p.name)}</div><div class="muted small">${p.kind === "loan" ? "loan payment" : esc(p.owner || JOINT)}${p.day ? ` · day ${esc(p.day)}` : ""}${by ? ` · from ${by}` : ""}${f === 0.5 ? " · your 50%" : f === 0 ? " · not yours" : ""}</div></div>
-            <div class="acct-right"><div class="mono">${esc(fmtMoney(p.amount, p.currency))}</div>
-              ${f === 0.5 ? `<div class="acct-orig mono">${esc(fmtMoney(p.amount / 2, p.currency))}</div>` : ""}</div>
+            <div><div>${esc(p.name)}</div><div class="muted small">${p.kind === "loan" ? "loan payment" : `${p.income ? "income · " : ""}${esc(p.owner || JOINT)}`}${p.day ? ` · day ${esc(p.day)}` : ""}${by ? ` · ${p.income ? "into" : "from"} ${by}` : ""}${f === 0.5 ? " · your 50%" : f === 0 ? " · not yours" : ""}</div></div>
+            <div class="acct-right"><div class="mono ${p.income ? "pos" : ""}">${sign}${esc(fmtMoney(p.amount, p.currency))}</div>
+              ${f === 0.5 ? `<div class="acct-orig mono">${sign}${esc(fmtMoney(p.amount / 2, p.currency))}</div>` : ""}</div>
           </li>`;
         }).join("")}</ul>
-        <div class="spread commit"><span>My fixed payments</span><span class="mono">${esc(fmtMoney(myFixedM || 0, cur))}</span></div>`
+        <div class="spread commit"><span>My fixed payments</span><span class="mono">${esc(fmtMoney(myFixedM || 0, cur))}</span></div>
+        ${myIncomeM ? `<div class="spread"><span>My fixed income</span><span class="mono pos">+${esc(fmtMoney(myIncomeM, cur))}</span></div>` : ""}`
         : `<p class="muted">No fixed payments for this month. Add rent, parking and similar under Manage.</p>`}
       </div>`;
 
@@ -868,6 +873,7 @@
       }).join("");
 
     const SPEND_COLORS = { cards: Charts.TYPE_COLORS.current, fixed: Charts.TYPE_COLORS.savings };
+    const INCOME_COLOR = "#5BE3A7";
     // Detail view: one series per card and per fixed/loan payment, at your share. Stable order
     // (cards, then fixed payments, then loans, each by name) so an item keeps its colour.
     const detail = LS.get("fd.spendDetail") === "1";
@@ -877,7 +883,7 @@
       cards.filter((a) => shareOf(a) > 0).sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname))).forEach((a) => items.push({
         name: norm(a.nickname) || a.id, values: yearMonths.map((m) => { const v = cardValue(a, m, true); return v == null ? null : v * shareOf(a); }),
       }));
-      Calc.fixedSeries(plainFixed()).filter((sr) => shareOf(sr.head) > 0).forEach((sr) => items.push({
+      Calc.fixedSeries(plainFixed()).filter((sr) => shareOf(sr.head) > 0 && lower(sr.head.direction) !== "in").forEach((sr) => items.push({
         name: norm(sr.head.name) || sr.id,
         values: yearMonths.map((m) => { const p = Calc.fixedForMonth(plainFixed(), m).find((x) => x.id === sr.id); const v = p ? conv(p.amount, p.currency, m) : null; return v == null ? null : v * shareOf(sr.head); }),
       }));
@@ -914,6 +920,8 @@
           <div class="label">My spending · ${Calc.monthLabel(month, true)}</div>
           <div class="big-number">${esc(fmtMoney(total, cur))}</div>
           <div class="muted small mono">Cards ${esc(fmtMoney(myCardsM || 0, cur))} · Fixed ${esc(fmtMoney(myFixedM || 0, cur))}</div>
+          ${myIncomeM ? `<div class="spread net-line"><span>Fixed income <span class="mono pos">+${esc(fmtMoney(myIncomeM, cur))}</span></span>
+            <span>Net spending <span class="mono">${esc(fmtMoney((total || 0) - myIncomeM, cur))}</span></span></div>` : ""}
           <div class="muted small">Your own in full + 50% of joint${avg != null ? ` · average ${esc(fmtMoney(avg, cur))} / month in ${year}` : ""}</div>
           ${household != null && household !== total ? `<div class="muted small">Household, full amounts: <span class="mono">${esc(fmtMoney(household, cur))}</span></div>` : ""}
           ${missing.length ? `<div class="muted small">Card totals missing this month: ${missing.map(accountName).join(", ")}</div>` : ""}
@@ -922,10 +930,12 @@
             <button type="button" data-view="1" aria-pressed="${detail}">DETAIL</button>
           </div>
           ${Charts.stacked({
-            labels, fmtTick: fmtTickFor(cur), series: chartSeries, tips: chartTips, highlight: yearMonths.indexOf(month),
+            labels, fmtTick: fmtTickFor(cur), series: chartSeries, highlight: yearMonths.indexOf(month),
+            negative: incomeSeries.some((v) => v) ? { color: INCOME_COLOR, values: incomeSeries } : null,
+            tips: chartTips.map((t, i) => (incomeSeries[i] ? `${t} · income +${fmtMoney(incomeSeries[i], cur)}` : t)),
             ariaLabel: detail ? "My spending by card and payment" : "My spending by month",
           })}
-          <div class="legend">${legendHtml}</div>
+          <div class="legend">${legendHtml}${incomeSeries.some((v) => v) ? `<span class="key"><i style="background:${INCOME_COLOR}"></i>Fixed income (below 0)</span>` : ""}</div>
         </div>
         ${fixedCard}
         ${cards.length ? `
@@ -977,8 +987,8 @@
       const from = h.paid_from ? state.accounts.find((a) => a.id === norm(h.paid_from)) : null;
       return `
         <button class="goal" data-fixed="${esc(s.id)}">
-          <div class="spread"><strong>${esc(h.name || s.id)}</strong><span class="mono">${esc(fmtMoney(amt, c, true))}</span></div>
-          <div class="muted small">${esc(h.owner || JOINT)}${norm(h.day) ? ` · day ${esc(h.day)}` : ""}${from ? ` · from ${accountName(from)}` : ""}</div>
+          <div class="spread"><strong>${esc(h.name || s.id)}</strong><span class="mono ${lower(h.direction) === "in" ? "pos" : ""}">${lower(h.direction) === "in" ? "+" : ""}${esc(fmtMoney(amt, c, true))}</span></div>
+          <div class="muted small">${lower(h.direction) === "in" ? "Income · " : ""}${esc(h.owner || JOINT)}${norm(h.day) ? ` · day ${esc(h.day)}` : ""}${from ? ` · ${lower(h.direction) === "in" ? "into" : "from"} ${accountName(from)}` : ""}</div>
           <div class="muted small mono">since ${Calc.monthLabel(inForce.from, true)}${next ? ` · ${esc(fmtMoney(Calc.parseAmount(next.row.amount), c, true))} from ${Calc.monthLabel(next.from, true)}` : ""}${s.stop ? ` · ends after ${Calc.monthLabel(s.stop, true)}` : ""}</div>
         </button>`;
     };
@@ -988,7 +998,7 @@
         <a class="btn small" href="#cards">Back</a>
       </div>
       <div class="stack-lg">
-        <p class="muted">Payments that leave a bank account every month outside the cards, like rent or parking. Loan payments come from each loan's own "Monthly payment".</p>
+        <p class="muted">Money that leaves a bank account every month outside the cards, like rent, and fixed money you receive, like renting out a parking spot. Loan payments come from each loan's own "Monthly payment".</p>
         <button class="btn primary block" id="fx-add">+ New fixed payment</button>
         ${current.length ? `<div class="stack">${current.map(item).join("")}</div>` : `<div class="card empty"><p class="muted">No fixed payments yet.</p></div>`}
         ${ended.length ? `<details><summary class="group-title"><span class="label">Ended (${ended.length}) ▾</span></summary><div class="stack">${ended.map(item).join("")}</div></details>` : ""}
@@ -1011,6 +1021,11 @@
       <form id="fx-form" class="stack-lg" novalidate>
         <div class="spread"><div><div class="label">${isNew ? "New fixed payment" : "Fixed payment"}</div><h2>${isNew ? "Add a payment" : esc(h.name)}</h2></div>
           <button type="button" class="icon-btn" data-close aria-label="Close">✕</button></div>
+        <div class="field"><span class="label">Type</span>
+          <div class="seg" id="fx-dir">
+            <button type="button" data-dir="out" aria-pressed="${lower(h.direction) !== "in"}">PAYMENT (OUT)</button>
+            <button type="button" data-dir="in" aria-pressed="${lower(h.direction) === "in"}">INCOME (IN)</button>
+          </div></div>
         <div class="field"><label class="label" for="fx-name">Name</label><input id="fx-name" value="${esc(h.name)}" autocomplete="off" placeholder="Rent"></div>
         ${isNew ? `
         <div class="field-row">
@@ -1022,7 +1037,7 @@
           <div class="field"><label class="label" for="fx-owner">Owner</label><select id="fx-owner">${options(names, matchName(h.owner, names) || JOINT)}</select></div>
           <div class="field"><label class="label" for="fx-day">Day of month</label><input id="fx-day" type="number" inputmode="numeric" min="1" max="31" value="${esc(h.day)}" placeholder="1–31"></div>
         </div>
-        <div class="field"><label class="label" for="fx-paid">Paid from</label>
+        <div class="field"><label class="label" for="fx-paid">Bank account (paid from / paid into)</label>
           <select id="fx-paid">${options(banks.map((a) => [a.id, `${norm(a.nickname) || a.id}`]), norm(h.paid_from), "Not set")}</select></div>
         <p class="err-text" id="fx-err"></p>
         <button class="btn primary block" type="submit">${isNew ? "Add payment" : "Save details"}</button>
@@ -1051,6 +1066,11 @@
 
     const $err = () => document.getElementById("fx-err");
     const v = (id) => norm(document.getElementById(id).value);
+    document.getElementById("fx-dir").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-dir]");
+      if (!b) return;
+      document.querySelectorAll("#fx-dir button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    });
     const run = async (btn, label, fn, done) => {
       setBusy(btn, true, label);
       try {
@@ -1077,7 +1097,8 @@
       const day = v("fx-day");
       if (!name) { $err().textContent = "Give it a name."; return; }
       if (day && !(Number.isInteger(Number(day)) && Number(day) >= 1 && Number(day) <= 31)) { $err().textContent = "Day must be 1–31."; return; }
-      const details = { name, owner: v("fx-owner"), paid_from: v("fx-paid"), day: day ? Number(day) : "" };
+      const dir = document.querySelector("#fx-dir [aria-pressed=\"true\"]").dataset.dir;
+      const details = { name, owner: v("fx-owner"), paid_from: v("fx-paid"), day: day ? Number(day) : "", direction: dir === "in" ? "in" : "" };
       const btn = e.target.querySelector('[type="submit"]');
       if (isNew) {
         const amount = Calc.parseAmount(v("fx-amount"));
@@ -1113,7 +1134,7 @@
           const hd = s.head;
           await Sheets.appendRows("Fixed", [{
             id: s.id, name: hd.name, amount, currency: norm(hd.currency).toUpperCase() || "ILS", owner: hd.owner,
-            paid_from: hd.paid_from, day: hd.day, from_month: from, to_month: "", notes: "",
+            paid_from: hd.paid_from, day: hd.day, from_month: from, to_month: "", notes: "", direction: norm(hd.direction),
           }]);
         }
       }, `New amount from ${Calc.monthLabel(from, true)}`);
@@ -1542,18 +1563,21 @@
     }).join("");
     // Other fixed payments (rent, parking…) in force this month, at your share.
     const nowM = Calc.currentMonth();
-    let fixedSum = 0;
-    const fixedNow = Calc.fixedForMonth(plainFixed(), nowM).filter((p) => myShare(p) > 0);
-    fixedNow.forEach((p) => {
+    let fixedSum = 0, incomeSum = 0;
+    const fixedAll = Calc.fixedForMonth(plainFixed(), nowM).filter((p) => myShare(p) > 0);
+    const fixedNow = fixedAll.filter((p) => !p.income);
+    const incomeNow = fixedAll.filter((p) => p.income);
+    fixedAll.forEach((p) => {
       const v = Calc.convert(p.amount * myShare(p), p.currency, cur, state.rates, nowM);
-      if (v == null) commitmentsKnown = false; else fixedSum += v;
+      if (v == null) commitmentsKnown = false; else if (p.income) incomeSum += v; else fixedSum += v;
     });
-    const loansCard = loans.length || fixedNow.length ? `
+    const loansCard = loans.length || fixedAll.length ? `
       <div class="card stack">
         <div class="spread"><div class="label">${loans.length ? "Loans & fixed payments" : "Fixed payments"}</div><a class="label link" href="#fixed">Manage ›</a></div>
         ${loans.length ? `<ul class="plain-list loan-list">${loanRows}</ul>` : ""}
         ${fixedNow.length ? `<div class="spread small"><span class="muted">${fixedNow.map((p) => esc(p.name)).join(", ")}</span><span class="mono">${esc(fmtMoney(fixedSum, cur))}</span></div>` : ""}
-        <div class="spread commit"><span>Fixed monthly commitments</span><span class="mono">${commitmentsKnown ? esc(fmtMoney(commitments + fixedSum, cur)) : "—"}</span></div>
+        ${incomeNow.length ? `<div class="spread small"><span class="muted">${incomeNow.map((p) => esc(p.name)).join(", ")} (income)</span><span class="mono pos">−${esc(fmtMoney(incomeSum, cur))}</span></div>` : ""}
+        <div class="spread commit"><span>Fixed monthly commitments${incomeNow.length ? " (after income)" : ""}</span><span class="mono">${commitmentsKnown ? esc(fmtMoney(commitments + fixedSum - incomeSum, cur)) : "—"}</span></div>
       </div>` : "";
 
     $screen.innerHTML = `${head}

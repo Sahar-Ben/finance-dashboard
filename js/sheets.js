@@ -17,7 +17,8 @@
     // Fixed monthly payments outside the cards (rent, parking). One row per version: a new row with a
     // later from_month records an amount change; to_month (on any row) ends the payment.
     // Rows with loan_id hold a loan's monthly-payment history instead of a separate payment.
-    Fixed: ["id", "name", "amount", "currency", "owner", "paid_from", "day", "from_month", "to_month", "notes", "loan_id"],
+    // direction: "in" for money received (e.g. renting out a parking spot); empty or "out" for a payment.
+    Fixed: ["id", "name", "amount", "currency", "owner", "paid_from", "day", "from_month", "to_month", "notes", "loan_id", "direction"],
   };
 
   class SheetsError extends Error {
