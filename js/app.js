@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.02-14";
+  const APP_VERSION = "2026.10.02-15";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "loan", "home", "card"];
@@ -581,6 +581,42 @@
   }
 
   // The signed-in person's share of an account: own in full, Joint half, the partner's not at all.
+  // Which owner an account counts as; null when the owner matches neither person nor Joint.
+  const ownerOf = (a) => matchName(a.owner, [...personNames(), JOINT]);
+
+  // Lists every bank account behind "My reachable money" for a month: full balance, share, amount counted.
+  function reachableBreakdownHtml(month, idx, cur) {
+    const banks = state.accounts.filter((a) => lower(a.type) === "current" && (isActive(a) || idx.get(norm(a.id), month)))
+      .sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname)));
+    if (!banks.length) return "";
+    let sum = 0;
+    const rows = banks.map((a) => {
+      const f = myShare(a);
+      const known = ownerOf(a);
+      const s = idx.get(norm(a.id), month);
+      const own = s ? (norm(s.currency).toUpperCase() || norm(a.currency).toUpperCase()) : norm(a.currency).toUpperCase();
+      const amt = s ? Calc.parseAmount(s.amount) : null;
+      const conv = amt != null && isFinite(amt) ? Calc.convert(amt, own, cur, state.rates, month) : null;
+      const counted = conv != null ? conv * f : null;
+      if (counted != null) sum += counted;
+      const shareTxt = f === 1 ? "100%" : f === 0.5 ? "50%" : "0%";
+      const why = !known ? `<span class="warn-text">owner "${esc(a.owner || "empty")}" not recognised, counted as Joint. Fix it in Edit account.</span>`
+        : f === 0 ? "the other person's account" : f === 0.5 ? "joint" : "yours";
+      return `<li>
+        <div><div>${accountName(a)}</div><div class="muted small">${esc(known || a.owner || "—")} · ${shareTxt} · ${why}</div></div>
+        <div class="acct-right">${s ? `<div class="mono small">${esc(fmtMoney(amt, own))}</div><div class="mono ${f ? "" : "muted"}">${f ? esc(fmtMoney(counted, cur)) : "not counted"}</div>`
+          : `<div class="small warn-text">no balance for ${esc(Calc.monthLabel(month))}</div>`}</div>
+      </li>`;
+    }).join("");
+    return `
+      <details class="calc">
+        <summary class="link-btn">How this is calculated</summary>
+        <ul class="plain-list loan-list" style="margin-top:8px">${rows}</ul>
+        <div class="spread commit"><span>Counted for you</span><span class="mono">${esc(fmtMoney(sum, cur))}</span></div>
+        <p class="muted small">Only accounts of type Bank count as reachable money, using the balance entered for ${esc(Calc.monthLabel(month, true))}. Savings and other types are in the long-term total.</p>
+      </details>`;
+  }
+
   function myShare(a) {
     const o = matchName(a.owner, [...personNames(), JOINT]) || JOINT;
     return o === state.me.name ? 1 : o === JOINT ? 0.5 : 0;
@@ -1491,6 +1527,7 @@
         <div class="spread"><div class="label">My reachable money · ${Calc.monthLabel(month, true)}</div>${incompleteChip}</div>
         <div class="big-number">${fmtMoney(t.reachable, cur)}</div>
         <div class="muted small">Your accounts in full + 50% of joint accounts</div>
+        ${reachableBreakdownHtml(month, idx, cur)}
         ${changes("reachable")}
       </div>
       <div class="card stack">

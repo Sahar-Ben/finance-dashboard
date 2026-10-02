@@ -149,6 +149,8 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 
 9. **Fixed income** (requested after change 8). A fixed payment can be **Income (in)**, `direction` = `in`, for money received every month, such as renting out a parking spot. It has the same amount history, owner share (Joint 50%) and end month as other fixed payments, and its bank account means "paid into". On **Spending**, income is listed in green with "+". The top card adds **Fixed income** and **Net spending** = my spending − my fixed income. The chart draws income below zero in both Summary and Detail. On the **Overview**, fixed monthly commitments = loan payments + fixed payments − fixed income, labelled "(after income)". Income never changes reachable money or the long-term total.
 
+10. **"How this is calculated" for reachable money** (added while checking a reported total). Under "My reachable money" on the Overview, an expandable list shows every bank account (type current) for the selected month: owner, share (100% / 50% / 0%), the full balance and the amount counted. It flags a missing balance for that month, and an owner that matches neither person nor Joint (such an account is counted as Joint, at 50%, until its owner is fixed in Edit account). The "Counted for you" line equals the headline figure.
+
 ## How to work
 
 Build one stage at a time. After each stage: update SPEC.md, commit, merge to main, and give a plain-language test checklist. Wait for the go-ahead before the next stage.
