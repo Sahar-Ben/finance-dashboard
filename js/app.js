@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.02-15";
+  const APP_VERSION = "2026.10.02-16";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "loan", "home", "card"];
@@ -908,6 +908,23 @@
           </div>`;
       }).join("");
 
+    // KPI: passive (fixed) income as a share of everything going out (cards + fixed + loans), at your share.
+    const coverage = (inc, out) => (out > 0 && inc != null ? (inc / out) * 100 : null);
+    const kMonth = coverage(myIncomeM || 0, total || 0);
+    const ytdMonths = yearMonths.filter((m) => m <= month);
+    const ytdOut = ytdMonths.reduce((sm, m, i) => sm + (totals[i] || 0), 0);
+    const ytdIn = ytdMonths.reduce((sm, m, i) => sm + (incomeSeries[i] || 0), 0);
+    const kYtd = coverage(ytdIn, ytdOut);
+    const kBar = (p) => `<div class="bar"><span style="width:${Math.max(p > 0 ? 2 : 0, Math.min(100, p)).toFixed(1)}%;background:linear-gradient(90deg,#2fbf85,var(--pos))"></span></div>`;
+    const kpiHtml = incomeSeries.some((v) => v) ? `
+      <div class="kpi stack">
+        <div class="label">Passive income covers</div>
+        <div class="kpi-grid">
+          <div><div class="kpi-num mono pos">${kMonth != null ? `${kMonth.toFixed(1)}%` : "—"}</div><div class="muted small">of spending · ${esc(Calc.monthLabel(month))}</div>${kMonth != null ? kBar(kMonth) : ""}</div>
+          <div><div class="kpi-num mono pos">${kYtd != null ? `${kYtd.toFixed(1)}%` : "—"}</div><div class="muted small">${esc(year)} so far · ${esc(fmtMoney(ytdIn, cur))} of ${esc(fmtMoney(ytdOut, cur))}</div>${kYtd != null ? kBar(kYtd) : ""}</div>
+        </div>
+        ${missing.length ? `<div class="muted small">Some card totals are missing this month, so the share may look higher than it is.</div>` : ""}
+      </div>` : "";
     const SPEND_COLORS = { cards: Charts.TYPE_COLORS.current, fixed: Charts.TYPE_COLORS.savings };
     const INCOME_COLOR = "#5BE3A7";
     // Detail view: one series per card and per fixed/loan payment, at your share. Stable order
@@ -958,6 +975,7 @@
           <div class="muted small mono">Cards ${esc(fmtMoney(myCardsM || 0, cur))} · Fixed ${esc(fmtMoney(myFixedM || 0, cur))}</div>
           ${myIncomeM ? `<div class="spread net-line"><span>Fixed income <span class="mono pos">+${esc(fmtMoney(myIncomeM, cur))}</span></span>
             <span>Net spending <span class="mono">${esc(fmtMoney((total || 0) - myIncomeM, cur))}</span></span></div>` : ""}
+          ${kpiHtml}
           <div class="muted small">Your own in full + 50% of joint${avg != null ? ` · average ${esc(fmtMoney(avg, cur))} / month in ${year}` : ""}</div>
           ${household != null && household !== total ? `<div class="muted small">Household, full amounts: <span class="mono">${esc(fmtMoney(household, cur))}</span></div>` : ""}
           ${missing.length ? `<div class="muted small">Card totals missing this month: ${missing.map(accountName).join(", ")}</div>` : ""}

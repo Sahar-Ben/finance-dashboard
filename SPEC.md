@@ -151,6 +151,8 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 
 10. **"How this is calculated" for reachable money** (added while checking a reported total). Under "My reachable money" on the Overview, an expandable list shows every bank account (type current) for the selected month: owner, share (100% / 50% / 0%), the full balance and the amount counted. It flags a missing balance for that month, and an owner that matches neither person nor Joint (such an account is counted as Joint, at 50%, until its owner is fixed in Edit account). The "Counted for you" line equals the headline figure.
 
+11. **Passive income KPI** (requested after change 9). On the Spending top card, when there is fixed income: **Passive income covers X% of spending**, for the selected month and for the year so far (January up to the selected month). Coverage = my fixed income ÷ my spending, where spending = cards + fixed payments + loan payments, all at the personal share. Each figure has a bar. A note warns when card totals are missing for the month, since that makes the share look higher.
+
 ## How to work
 
 Build one stage at a time. After each stage: update SPEC.md, commit, merge to main, and give a plain-language test checklist. Wait for the go-ahead before the next stage.

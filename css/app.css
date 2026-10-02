@@ -304,6 +304,11 @@ a.link-card { color: inherit; text-decoration: none; }
 .net-line { border-top: 1px solid var(--border); padding-top: 10px; font-weight: 500; flex-wrap: wrap; }
 .net-line > span { white-space: nowrap; }
 
+.kpi { border-top: 1px solid var(--border); padding-top: 12px; gap: 8px; }
+.kpi-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.kpi-grid > div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.kpi-num { font-size: 26px; font-weight: 500; letter-spacing: -0.02em; }
+
 /* Banks */
 .nowrap { white-space: nowrap; }
 .bank-chg { text-align: right; flex: none; }
