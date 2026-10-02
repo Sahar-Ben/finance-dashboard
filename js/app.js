@@ -529,6 +529,7 @@
     // First run: nobody is set up yet, so the signed-in user configures the two people.
     if (!peopleConfigured()) return renderSetupPeople();
     if (!state.me) return renderNotRecognised();
+    if ($sheet.hidden) document.body.style.overflow = ""; // never leave scrolling locked by a closed panel
     const tab = currentTab();
     const r = currentRoute();
     $tabbar.hidden = false;
