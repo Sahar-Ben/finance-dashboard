@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.02-17";
+  const APP_VERSION = "2026.10.02-18";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "loan", "home", "card"];
@@ -1654,6 +1654,12 @@
         <a class="btn block" href="#update">Add the missing balances</a>
       </div>` : "";
 
+    // A home is a yearly estimate: say which month its value comes from instead of "no change".
+    const homeNote = (m) => {
+      const months = state.accounts.filter((a) => lower(a.type) === "home" && myShare(a) > 0)
+        .map((a) => { const b = Calc.balanceFor(a, m, idx); return b ? b.month : null; }).filter(Boolean).sort();
+      return months.length ? `estimate from ${Calc.monthLabel(months[months.length - 1])} · yearly` : "yearly estimate";
+    };
     // Long-term view: each long-term type with total, share of assets and change vs the previous month.
     const LT_TYPES = ["savings", "investment", "crypto", "long_term", "home"];
     const typeCards = t.hasBalances ? LT_TYPES.filter((ty) => t.counts[ty]).map((ty) => {
@@ -1665,8 +1671,10 @@
           <div class="spread"><span class="label">${TYPE_LABEL[ty]}</span><span class="label">${t.counts[ty]}</span></div>
           <div class="type-value mono">${fmtMoney(v, cur)}</div>
           <div class="bar"><span style="width:${Math.max(2, Math.min(100, share)).toFixed(1)}%"></span></div>
-          <div class="muted small mono">${share.toFixed(1)}% of assets</div>
-          <div class="small mono ${c ? toneOf(c.amount) : "muted"}">${c ? `${fmtSigned(c.amount, cur)} ${fmtPct(c.pct)}` : `no ${Calc.monthLabel(prevM)} data`}</div>
+          <div class="muted small mono">${share.toFixed(1)}% of all you own</div>
+          <div class="small mono ${c && (ty !== "home" || Math.abs(c.amount) >= 0.5) ? toneOf(c.amount) : "muted"}">${ty === "home" && (!c || Math.abs(c.amount) < 0.5)
+            ? homeNote(month)
+            : c ? `${fmtSigned(c.amount, cur)} ${fmtPct(c.pct)}` : `no ${Calc.monthLabel(prevM)} data`}</div>
         </div>`;
     }).join("") : "";
     const cardsCard = t.cardCount ? `
@@ -1729,7 +1737,8 @@
         ${rateNoticesHtml(months.all)}
         ${hero}
         ${missing}
-        ${typeCards || cardsCard ? `<div><div class="group-title"><span class="label">Long-term view</span><span class="label">vs ${Calc.monthLabel(prevM)}</span></div><div class="type-grid">${typeCards}${cardsCard}</div></div>` : ""}
+        ${typeCards || cardsCard ? `<div><div class="group-title"><span class="label">Long-term view</span><span class="label">vs ${Calc.monthLabel(prevM)}</span></div>
+        <p class="muted small" style="margin:-4px 4px 10px">Bars show each part's share of everything you own (your share of joint items).</p><div class="type-grid">${typeCards}${cardsCard}</div></div>` : ""}
         ${loansCard}
         ${goalsSection}
       </div>`;
