@@ -30,6 +30,7 @@ Create these tabs with these exact headers if they are missing; never overwrite 
 | Goals | id, name, target_amount, currency, account_ids, active |
 | Rates | month, usd_ils, eur_ils |
 | Settings | key, value |
+| Fixed | id, name, amount, currency, owner, paid_from, day, from_month, to_month, notes *(added after Stage 4, see change 6)* |
 
 Rules:
 
@@ -133,6 +134,14 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 4. **Personal share on Cards and Banks** (requested after Stage 4; a deliberate exception to decision note 15 for these two headline figures only). The top figure on the **Cards** tab ("My cards") and on the **Banks** tab ("My bank accounts") is the signed-in person's share: their own accounts in full, Joint accounts at 50%, the other person's own accounts left out. The full household amount is shown on a small line underneath. Everything else keeps full amounts: each card and each bank, the owner split, and all Overview and Trends totals. Joint cards also show "your 50%". The cards chart and average use the personal share.
 
 5. **Personal share on the Overview too** (requested after point 4). Every Overview figure is the signed-in person's share: reachable money, the long-term total and their changes, the Long-term view cards, the cards-spending card, and Loans (a joint loan's remaining balance and monthly payment at 50%, so fixed monthly commitments too). The other person's own accounts are left out entirely, including from the "incomplete month" list. Goals and Trends still use full amounts. Mechanism: `Calc.monthTotals(..., shareOf)` weights each account by `myShare` (1 own, 0.5 Joint, 0 other person).
+
+6. **Fixed payments and the Spending tab** (requested after Stage 4).
+   - A **Fixed** tab in the sheet holds monthly payments made outside the cards (rent, parking). Each payment has an id. Every amount change adds a row with the same id and a later `from_month`, so earlier months keep the old amount. `to_month` on any row ends the payment after that month. Name, owner, paid_from and day are edited on all rows of the payment together.
+   - Managed under **Spending → Manage** (screen `#fixed`): add a payment (name, monthly amount, currency, owner, day, paid from, starting month); change the amount from a chosen month; delete a mistaken amount version; end or resume a payment.
+   - The **Cards** tab is renamed **Spending**. The top figure is *my spending* for the month = cards + fixed payments + loan payments, each at the personal share (own in full, Joint 50%, the other person's left out), with the household full amount underneath. A stacked chart shows cards and fixed payments for the year with the monthly average. A "Fixed payments" list shows each payment that month, including loan payments. Cards by owner and each card stay as before.
+   - **Loan payments stay on the loan account** (`monthly_payment`) and are counted once: in Spending from the loan's first balance month on, and in the Overview.
+   - The Overview's **Fixed monthly commitments** = loan payments + fixed payments in force this month, at the personal share.
+   - None of this changes reachable money or the long-term total; that money already shows when it leaves the bank accounts. It does not conflict with decision note 2: these are a few fixed amounts, not transactions.
 
 ## How to work
 

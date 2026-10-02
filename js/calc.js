@@ -325,6 +325,46 @@
     };
   }
 
+  // ---------- fixed payments ----------
+
+  // Groups Fixed rows by id: [{ id, versions: [{ row, from }] ascending, stop, head }].
+  function fixedSeries(rows) {
+    const map = new Map();
+    rows.forEach((r) => {
+      const id = norm(r.id);
+      const from = normMonth(r.from_month);
+      if (!id || !from) return;
+      if (!map.has(id)) map.set(id, []);
+      map.get(id).push({ row: r, from });
+    });
+    const out = [];
+    map.forEach((versions, id) => {
+      versions.sort((a, b) => a.from.localeCompare(b.from));
+      const stop = versions.map((v) => normMonth(v.row.to_month)).filter(Boolean).sort().pop() || null;
+      out.push({ id, versions, stop, head: versions[versions.length - 1].row });
+    });
+    return out.sort((a, b) => norm(a.head.name).localeCompare(norm(b.head.name)));
+  }
+
+  // Payments that apply in `month`, each with the amount of the version in force that month.
+  function fixedForMonth(rows, month) {
+    const out = [];
+    fixedSeries(rows).forEach((s) => {
+      if (s.stop && month > s.stop) return;
+      const v = s.versions.filter((x) => x.from <= month).pop();
+      if (!v) return;
+      const amount = parseAmount(v.row.amount);
+      if (!isFinite(amount)) return;
+      out.push({
+        id: s.id, name: norm(s.head.name) || s.id, amount,
+        currency: (norm(v.row.currency) || norm(s.head.currency)).toUpperCase() || "ILS",
+        owner: norm(s.head.owner), paid_from: norm(s.head.paid_from), day: norm(s.head.day),
+        since: v.from, series: s,
+      });
+    });
+    return out;
+  }
+
   // ---------- import ----------
 
   // Splits pasted text into raw rows: month | account_id | amount | currency | as_of_date
@@ -428,7 +468,7 @@
     TYPES, ASSET_TYPES, CURRENCIES, MONTH_NAMES, LARGE_CHANGE_RATIO, TRIVIAL_ILS,
     currentMonth, today, isMonth, normMonth, shiftMonth, monthLabel, lastDayOfMonth, normDate, parseAmount,
     validRate, rateTable, rateFor, convert,
-    isActive, indexSnapshots, snapshotMonths, balanceFor, monthTotals, change, latestSnapshot, monthRange, dueList, goalProgress, splitIds,
+    isActive, indexSnapshots, snapshotMonths, balanceFor, monthTotals, change, latestSnapshot, monthRange, dueList, goalProgress, splitIds, fixedSeries, fixedForMonth,
     splitImport, checkImport,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

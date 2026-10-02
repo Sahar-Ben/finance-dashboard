@@ -13,6 +13,9 @@
     Goals: ["id", "name", "target_amount", "currency", "account_ids", "active"],
     Rates: ["month", "usd_ils", "eur_ils"],
     Settings: ["key", "value"],
+    // Fixed monthly payments outside the cards (rent, parking). One row per version: a new row with a
+    // later from_month records an amount change; to_month (on any row) ends the payment.
+    Fixed: ["id", "name", "amount", "currency", "owner", "paid_from", "day", "from_month", "to_month", "notes"],
   };
 
   class SheetsError extends Error {

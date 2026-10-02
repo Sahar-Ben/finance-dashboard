@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.02-10";
+  const APP_VERSION = "2026.10.02-11";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "loan", "home", "card"];
@@ -356,10 +356,12 @@
   }
 
   async function loadData() {
-    const [settings, accounts, snaps, rates, goals] = await Promise.all([
+    const [settings, accounts, snaps, rates, goals, fixed] = await Promise.all([
       Sheets.readSettings(), Sheets.readTab("Accounts"), Sheets.readTab("Snapshots"), Sheets.readTab("Rates"), Sheets.readTab("Goals"),
+      Sheets.readTab("Fixed"),
     ]);
     state.goals = goals.rows;
+    state.fixed = fixed.rows;
     state.settings = settings;
     state.accounts = accounts.rows;
     setSnapshots(snaps);
@@ -509,7 +511,7 @@
     { id: "overview", label: "Overview", render: renderOverview },
     { id: "accounts", label: "Accounts", render: renderAccounts },
     { id: "banks", label: "Banks", render: renderBanks },
-    { id: "cards", label: "Cards", render: renderCards },
+    { id: "cards", label: "Spending", render: renderCards },
     { id: "trends", label: "Trends", render: renderTrends },
     { id: "more", label: "More", render: renderMore },
   ];
@@ -518,6 +520,7 @@
   const SUBSCREENS = {
     update: { tab: "overview", render: () => renderUpdate() },
     goals: { tab: "more", render: () => renderGoals() },
+    fixed: { tab: "cards", render: () => renderFixed() },
   };
 
   function currentRoute() {
@@ -693,33 +696,53 @@
     }));
   }
 
-  // ---------- Cards ----------
+  // ---------- Spending: cards, fixed payments and loan payments ----------
+
+  // Loan payments that apply in a month: active loans with a monthly_payment, from their first balance on.
+  function loanPaymentsFor(month, idx) {
+    return state.accounts.filter((a) => lower(a.type) === "loan" && isActive(a) && norm(a.monthly_payment) !== "")
+      .filter((a) => { const first = idx.firstMonth.get(norm(a.id)); return first ? first <= month : month >= Calc.currentMonth(); })
+      .map((a) => ({ id: a.id, name: norm(a.nickname) || a.id, amount: Calc.parseAmount(a.monthly_payment),
+        currency: norm(a.currency).toUpperCase() || "ILS", owner: norm(a.owner), account: a }))
+      .filter((p) => isFinite(p.amount));
+  }
 
   function renderCards() {
     const cur = state.displayCur;
     const idx = Calc.indexSnapshots(state.snapshots);
+    const nowM = Calc.currentMonth();
     const cards = state.accounts.filter((a) => lower(a.type) === "card");
     const cardIds = new Set(cards.map((a) => norm(a.id)));
     const head = `
       <div class="page-head">
-        <div><div class="label">Spending</div><h1>Cards</h1></div>
+        <div><div class="label">Cards & fixed payments</div><h1>Spending</h1></div>
       </div>
       <div class="cur-row">${curSegHtml()}</div>`;
     const cardMonths = [...new Set(state.snapshots.filter((s) => cardIds.has(norm(s.account_id)))
-      .map((s) => Calc.normMonth(s.month)).filter(Boolean))].sort().reverse();
-    if (!cards.length || !cardMonths.length) {
+      .map((s) => Calc.normMonth(s.month)).filter(Boolean))];
+    // Months with fixed or loan payments: from the earliest start up to this month.
+    const starts = [
+      ...Calc.fixedSeries(state.fixed || []).map((s) => s.versions[0].from),
+      ...loanPaymentsFor(nowM, idx).map((p) => idx.firstMonth.get(norm(p.id)) || nowM),
+    ].filter((m) => m && m <= nowM).sort();
+    const fixedMonths = starts.length ? Calc.monthRange(starts[0], nowM) : [];
+    const allMonths = [...new Set([...cardMonths, ...fixedMonths])].sort().reverse();
+    if (!allMonths.length) {
       $screen.innerHTML = `${head}
         <div class="card empty stack">
-          <p class="muted">${!cards.length ? "No cards yet. Add a card on the Accounts tab (type Card)." : "No card totals yet. Add each card's monthly total with Update."}</p>
-          <a class="btn block" href="${!cards.length ? "#accounts" : "#update"}">${!cards.length ? "Go to Accounts" : "Update"}</a>
+          <p class="muted">Nothing to show yet. Add each card's monthly total with Update, and your rent or parking under Fixed payments.</p>
+          <a class="btn block" href="#update">Update</a>
+          <a class="btn block" href="#fixed">Fixed payments</a>
         </div>`;
       bindCurSeg();
       return;
     }
-    if (!state.cardMonth || !cardMonths.includes(state.cardMonth)) state.cardMonth = cardMonths[0];
+    if (!state.cardMonth || !allMonths.includes(state.cardMonth)) {
+      state.cardMonth = [...cardMonths].sort().pop() || allMonths.find((m) => m <= nowM) || allMonths[0];
+    }
     const month = state.cardMonth;
     const year = month.slice(0, 4);
-    const lastInYear = [Calc.currentMonth(), ...cardMonths].filter((m) => m.slice(0, 4) === year).sort().pop() || `${year}-12`;
+    const lastInYear = [nowM, ...allMonths].filter((m) => m.slice(0, 4) === year).sort().pop() || `${year}-12`;
     const yearMonths = Calc.monthRange(`${year}-01`, lastInYear);
     const labels = yearMonths.map((m) => MONTHS[Number(m.slice(5)) - 1]);
     const conv = (amt, c, m) => Calc.convert(amt, c, cur, state.rates, m);
@@ -731,9 +754,9 @@
       const own = norm(s.currency).toUpperCase() || norm(a.currency).toUpperCase();
       return display ? conv(v, own, m) : v;
     };
-    // The signed-in person's share of a card: own cards in full, joint cards half, the partner's cards not at all.
+    // Personal share: own in full, joint half, the partner's own not at all (household = everything in full).
     const shareOf = myShare;
-    const combined = (m, household) => {
+    const cardsTotal = (m, household) => {
       let sum = 0, any = false;
       cards.forEach((a) => {
         const f = household ? 1 : shareOf(a);
@@ -743,14 +766,32 @@
       });
       return any ? sum : null;
     };
+    const fixedItems = (m) => [
+      ...Calc.fixedForMonth(state.fixed || [], m).map((p) => ({ ...p, kind: "fixed" })),
+      ...loanPaymentsFor(m, idx).map((p) => ({ ...p, kind: "loan" })),
+    ];
+    const fixedTotal = (m, household) => {
+      let sum = 0, any = false;
+      fixedItems(m).forEach((p) => {
+        const f = household ? 1 : shareOf(p);
+        if (!f) return;
+        const v = conv(p.amount, p.currency, m);
+        if (v != null) { sum += v * f; any = true; }
+      });
+      return any ? sum : null;
+    };
     const avgOf = (vals) => { const v = vals.filter((x) => x != null); return v.length ? v.reduce((s, x) => s + x, 0) / v.length : null; };
+    const sumOrNull = (a, b) => (a == null && b == null ? null : (a || 0) + (b || 0));
 
-    const totals = yearMonths.map((m) => combined(m, false));
-    const total = combined(month, false);
-    const household = combined(month, true);
+    const cardSeries = yearMonths.map((m) => cardsTotal(m, false));
+    const fixedSeriesV = yearMonths.map((m) => fixedTotal(m, false));
+    const totals = yearMonths.map((m, i) => sumOrNull(cardSeries[i], fixedSeriesV[i]));
+    const myCardsM = cardsTotal(month, false);
+    const myFixedM = fixedTotal(month, false);
+    const total = sumOrNull(myCardsM, myFixedM);
+    const household = sumOrNull(cardsTotal(month, true), fixedTotal(month, true));
     const avg = avgOf(totals);
     const myCards = cards.filter((a) => shareOf(a) > 0);
-    const withData = myCards.filter((a) => cardValue(a, month, false) != null);
     const missing = myCards.filter((a) => isActive(a) && cardValue(a, month, false) == null
       && (idx.firstMonth.get(norm(a.id)) || "9999") <= month);
 
@@ -760,14 +801,32 @@
       cards.forEach((a) => { if ((matchName(a.owner, owners) || JOINT) === n) { const v = cardValue(a, month, true); if (v != null) sum += v; } });
       return { name: n, sum };
     });
+    const cardsHousehold = byOwner.reduce((s, o) => s + o.sum, 0);
 
     const sel = `
       <div class="month-bar">
-        <button class="icon-btn" id="cd-prev" aria-label="Earlier month" ${cardMonths.indexOf(month) >= cardMonths.length - 1 ? "disabled" : ""}>‹</button>
-        <select id="cd-month" aria-label="Month">${cardMonths.map((m) => `<option value="${m}" ${m === month ? "selected" : ""}>${Calc.monthLabel(m, true)}</option>`).join("")}</select>
-        <button class="icon-btn" id="cd-next" aria-label="Later month" ${cardMonths.indexOf(month) <= 0 ? "disabled" : ""}>›</button>
+        <button class="icon-btn" id="cd-prev" aria-label="Earlier month" ${allMonths.indexOf(month) >= allMonths.length - 1 ? "disabled" : ""}>‹</button>
+        <select id="cd-month" aria-label="Month">${allMonths.map((m) => `<option value="${m}" ${m === month ? "selected" : ""}>${Calc.monthLabel(m, true)}</option>`).join("")}</select>
+        <button class="icon-btn" id="cd-next" aria-label="Later month" ${allMonths.indexOf(month) <= 0 ? "disabled" : ""}>›</button>
       </div>`;
-    const tip = (m, v) => `${Calc.monthLabel(m, true)} · ${v != null ? fmtMoney(v, cur) : "no totals"}`;
+
+    const fixedList = fixedItems(month);
+    const paidFromName = (id) => { const a = id ? state.accounts.find((x) => x.id === id) : null; return a ? accountName(a) : ""; };
+    const fixedCard = `
+      <div class="card stack">
+        <div class="spread"><div class="label">Fixed payments · ${Calc.monthLabel(month, true)}</div><a class="label link" href="#fixed">Manage ›</a></div>
+        ${fixedList.length ? `<ul class="plain-list loan-list">${fixedList.map((p) => {
+          const f = shareOf(p);
+          const by = p.kind === "loan" ? paidFromName(norm(p.account.linked_account)) : paidFromName(p.paid_from);
+          return `<li>
+            <div><div>${esc(p.name)}</div><div class="muted small">${p.kind === "loan" ? "loan payment" : esc(p.owner || JOINT)}${p.day ? ` · day ${esc(p.day)}` : ""}${by ? ` · from ${by}` : ""}${f === 0.5 ? " · your 50%" : f === 0 ? " · not yours" : ""}</div></div>
+            <div class="acct-right"><div class="mono">${esc(fmtMoney(p.amount, p.currency))}</div>
+              ${f === 0.5 ? `<div class="acct-orig mono">${esc(fmtMoney(p.amount / 2, p.currency))}</div>` : ""}</div>
+          </li>`;
+        }).join("")}</ul>
+        <div class="spread commit"><span>My fixed payments</span><span class="mono">${esc(fmtMoney(myFixedM || 0, cur))}</span></div>`
+        : `<p class="muted">No fixed payments for this month. Add rent, parking and similar under Manage.</p>`}
+      </div>`;
 
     const cardItems = cards.filter((a) => isActive(a) || yearMonths.some((m) => cardValue(a, m, false) != null))
       .sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname))).map((a) => {
@@ -792,38 +851,235 @@
           </div>`;
       }).join("");
 
+    const SPEND_COLORS = { cards: Charts.TYPE_COLORS.current, fixed: Charts.TYPE_COLORS.savings };
     $screen.innerHTML = `${head}
       <div class="stack-lg">
         ${sel}
         <div class="card hero stack">
-          <div class="label">My cards · ${Calc.monthLabel(month, true)}</div>
+          <div class="label">My spending · ${Calc.monthLabel(month, true)}</div>
           <div class="big-number">${esc(fmtMoney(total, cur))}</div>
-          <div class="muted small">Your cards in full + 50% of joint cards · ${withData.length} card${withData.length === 1 ? "" : "s"}${avg != null ? ` · average ${esc(fmtMoney(avg, cur))} / month in ${year}` : ""}</div>
-          ${household != null && household !== total ? `<div class="muted small">All cards, full amounts: <span class="mono">${esc(fmtMoney(household, cur))}</span></div>` : ""}
-          ${missing.length ? `<div class="muted small">Missing this month: ${missing.map(accountName).join(", ")}</div>` : ""}
-          ${Charts.bars({ labels, values: totals, avg, highlight: yearMonths.indexOf(month), fmtTick: fmtTickFor(cur),
-            tips: yearMonths.map((m, i) => tip(m, totals[i])), ariaLabel: "My cards by month" })}
+          <div class="muted small mono">Cards ${esc(fmtMoney(myCardsM || 0, cur))} · Fixed ${esc(fmtMoney(myFixedM || 0, cur))}</div>
+          <div class="muted small">Your own in full + 50% of joint${avg != null ? ` · average ${esc(fmtMoney(avg, cur))} / month in ${year}` : ""}</div>
+          ${household != null && household !== total ? `<div class="muted small">Household, full amounts: <span class="mono">${esc(fmtMoney(household, cur))}</span></div>` : ""}
+          ${missing.length ? `<div class="muted small">Card totals missing this month: ${missing.map(accountName).join(", ")}</div>` : ""}
+          ${Charts.stacked({
+            labels, fmtTick: fmtTickFor(cur),
+            series: [{ key: "cards", color: SPEND_COLORS.cards, values: cardSeries }, { key: "fixed", color: SPEND_COLORS.fixed, values: fixedSeriesV }],
+            tips: yearMonths.map((m, i) => `${Calc.monthLabel(m, true)} · ${totals[i] != null ? `${fmtMoney(totals[i], cur)} (cards ${fmtMoney(cardSeries[i] || 0, cur)}, fixed ${fmtMoney(fixedSeriesV[i] || 0, cur)})` : "nothing recorded"}`),
+            ariaLabel: "My spending by month",
+          })}
+          <div class="legend"><span class="key"><i style="background:${SPEND_COLORS.cards}"></i>Cards</span><span class="key"><i style="background:${SPEND_COLORS.fixed}"></i>Fixed payments</span></div>
         </div>
+        ${fixedCard}
+        ${cards.length ? `
         <div class="card stack">
-          <div class="label">By owner · ${Calc.monthLabel(month, true)}</div>
+          <div class="label">Cards by owner · ${Calc.monthLabel(month, true)}</div>
           ${byOwner.map((o) => `
             <div class="stack" style="gap:6px">
               <div class="spread"><span>${esc(o.name)}</span><span class="mono">${esc(fmtMoney(o.sum, cur))}</span></div>
-              <div class="bar"><span style="width:${total ? Math.max(o.sum > 0 ? 2 : 0, (o.sum / total) * 100).toFixed(1) : 0}%"></span></div>
+              <div class="bar"><span style="width:${cardsHousehold ? Math.max(o.sum > 0 ? 2 : 0, (o.sum / cardsHousehold) * 100).toFixed(1) : 0}%"></span></div>
             </div>`).join("")}
         </div>
         <div>
           <div class="group-title"><span class="label">Each card</span></div>
           <div class="stack">${cardItems}</div>
-        </div>
-        <p class="muted small">Card totals are spending only and never change reachable money or the long-term total.</p>
+        </div>` : ""}
+        <p class="muted small">Spending never changes reachable money or the long-term total; that money already shows up when it leaves your bank accounts.</p>
       </div>`;
     Charts.bind($screen);
     bindCurSeg();
     const go = (m) => { state.cardMonth = m; const y = window.scrollY; renderCards(); window.scrollTo(0, y); };
     document.getElementById("cd-month").addEventListener("change", (e) => go(e.target.value));
-    document.getElementById("cd-prev").addEventListener("click", () => go(cardMonths[cardMonths.indexOf(month) + 1]));
-    document.getElementById("cd-next").addEventListener("click", () => go(cardMonths[cardMonths.indexOf(month) - 1]));
+    document.getElementById("cd-prev").addEventListener("click", () => go(allMonths[allMonths.indexOf(month) + 1]));
+    document.getElementById("cd-next").addEventListener("click", () => go(allMonths[allMonths.indexOf(month) - 1]));
+  }
+
+  // ---------- Fixed payments: list and editor ----------
+
+  async function loadFixed() {
+    state.fixed = (await Sheets.readTab("Fixed")).rows;
+  }
+
+  function renderFixed() {
+    const nowM = Calc.currentMonth();
+    const series = Calc.fixedSeries(state.fixed || []);
+    const current = series.filter((s) => !s.stop || s.stop >= nowM);
+    const ended = series.filter((s) => s.stop && s.stop < nowM);
+    const item = (s) => {
+      const inForce = s.versions.filter((v) => v.from <= nowM).pop() || s.versions[0];
+      const next = s.versions.find((v) => v.from > nowM);
+      const h = s.head;
+      const amt = Calc.parseAmount(inForce.row.amount);
+      const c = (norm(inForce.row.currency) || norm(h.currency)).toUpperCase() || "ILS";
+      const from = h.paid_from ? state.accounts.find((a) => a.id === norm(h.paid_from)) : null;
+      return `
+        <button class="goal" data-fixed="${esc(s.id)}">
+          <div class="spread"><strong>${esc(h.name || s.id)}</strong><span class="mono">${esc(fmtMoney(amt, c, true))}</span></div>
+          <div class="muted small">${esc(h.owner || JOINT)}${norm(h.day) ? ` · day ${esc(h.day)}` : ""}${from ? ` · from ${accountName(from)}` : ""}</div>
+          <div class="muted small mono">since ${Calc.monthLabel(inForce.from, true)}${next ? ` · ${esc(fmtMoney(Calc.parseAmount(next.row.amount), c, true))} from ${Calc.monthLabel(next.from, true)}` : ""}${s.stop ? ` · ends after ${Calc.monthLabel(s.stop, true)}` : ""}</div>
+        </button>`;
+    };
+    $screen.innerHTML = `
+      <div class="page-head">
+        <div><div class="label">Spending</div><h1>Fixed payments</h1></div>
+        <a class="btn small" href="#cards">Back</a>
+      </div>
+      <div class="stack-lg">
+        <p class="muted">Payments that leave a bank account every month outside the cards, like rent or parking. Loan payments come from each loan's own "Monthly payment".</p>
+        <button class="btn primary block" id="fx-add">+ New fixed payment</button>
+        ${current.length ? `<div class="stack">${current.map(item).join("")}</div>` : `<div class="card empty"><p class="muted">No fixed payments yet.</p></div>`}
+        ${ended.length ? `<details><summary class="group-title"><span class="label">Ended (${ended.length}) ▾</span></summary><div class="stack">${ended.map(item).join("")}</div></details>` : ""}
+      </div>`;
+    document.getElementById("fx-add").addEventListener("click", () => openFixedForm(null));
+    $screen.querySelectorAll("[data-fixed]").forEach((b) => b.addEventListener("click", () => {
+      const s = Calc.fixedSeries(state.fixed || []).find((x) => x.id === b.dataset.fixed);
+      if (s) openFixedForm(s);
+    }));
+  }
+
+  function openFixedForm(series) {
+    const isNew = !series;
+    const h = series ? series.head : { owner: JOINT, currency: "ILS" };
+    const names = [...personNames(), JOINT];
+    const banks = state.accounts.filter((a) => isActive(a) && ["current", "savings"].includes(lower(a.type)));
+    const nowM = Calc.currentMonth();
+    const cur = norm(h.currency).toUpperCase() || "ILS";
+    openSheet(`
+      <form id="fx-form" class="stack-lg" novalidate>
+        <div class="spread"><div><div class="label">${isNew ? "New fixed payment" : "Fixed payment"}</div><h2>${isNew ? "Add a payment" : esc(h.name)}</h2></div>
+          <button type="button" class="icon-btn" data-close aria-label="Close">✕</button></div>
+        <div class="field"><label class="label" for="fx-name">Name</label><input id="fx-name" value="${esc(h.name)}" autocomplete="off" placeholder="Rent"></div>
+        ${isNew ? `
+        <div class="field-row">
+          <div class="field"><label class="label" for="fx-amount">Amount per month</label><input id="fx-amount" type="text" inputmode="decimal" placeholder="1,000"></div>
+          <div class="field"><label class="label" for="fx-cur">Currency</label><select id="fx-cur">${options(CURRENCIES, cur)}</select></div>
+        </div>
+        <div class="field"><label class="label" for="fx-from">Starting month</label><input id="fx-from" type="month" value="${nowM}"></div>` : ""}
+        <div class="field-row">
+          <div class="field"><label class="label" for="fx-owner">Owner</label><select id="fx-owner">${options(names, matchName(h.owner, names) || JOINT)}</select></div>
+          <div class="field"><label class="label" for="fx-day">Day of month</label><input id="fx-day" type="number" inputmode="numeric" min="1" max="31" value="${esc(h.day)}" placeholder="1–31"></div>
+        </div>
+        <div class="field"><label class="label" for="fx-paid">Paid from</label>
+          <select id="fx-paid">${options(banks.map((a) => [a.id, `${norm(a.nickname) || a.id}`]), norm(h.paid_from), "Not set")}</select></div>
+        <p class="err-text" id="fx-err"></p>
+        <button class="btn primary block" type="submit">${isNew ? "Add payment" : "Save details"}</button>
+        ${isNew ? "" : `
+        <div class="card stack">
+          <div class="label">Change the amount</div>
+          <p class="muted small">Enter the new amount and the first month it applies. Earlier months keep the old amount.</p>
+          <div class="field-row">
+            <div class="field"><label class="label" for="fx-new-amount">New amount (${esc(cur)})</label><input id="fx-new-amount" type="text" inputmode="decimal" placeholder="1,020"></div>
+            <div class="field"><label class="label" for="fx-new-from">From month</label><input id="fx-new-from" type="month" value="${Calc.shiftMonth(nowM, 1)}"></div>
+          </div>
+          <button class="btn block" type="button" id="fx-change">Save new amount</button>
+          <div class="label" style="margin-top:6px">History</div>
+          <ul class="plain-list">${series.versions.slice().reverse().map((v) => `
+            <li><span class="mono">From ${Calc.monthLabel(v.from, true)}</span>
+              <span class="row"><span class="mono">${esc(fmtMoney(Calc.parseAmount(v.row.amount), cur, true))}</span>
+              ${series.versions.length > 1 ? `<button type="button" class="btn small danger" data-fx-del="${esc(v.from)}">Delete</button>` : ""}</span></li>`).join("")}</ul>
+        </div>
+        <div class="card stack">
+          <div class="label">${series.stop ? `Ends after ${Calc.monthLabel(series.stop, true)}` : "End this payment"}</div>
+          ${series.stop ? `<button class="btn block" type="button" id="fx-resume">Keep paying (remove the end)</button>` : `
+          <div class="field"><label class="label" for="fx-stop">Last month it is paid</label><input id="fx-stop" type="month" value="${nowM}"></div>
+          <button class="btn danger block" type="button" id="fx-end">End payment</button>`}
+        </div>`}
+      </form>`);
+
+    const $err = () => document.getElementById("fx-err");
+    const v = (id) => norm(document.getElementById(id).value);
+    const run = async (btn, label, fn, done) => {
+      setBusy(btn, true, label);
+      try {
+        await guarded(async () => { await fn(); await loadFixed(); });
+        closeSheet();
+        toast(done);
+        route();
+      } catch (ex) {
+        $err().textContent = friendlyError(ex);
+        setBusy(btn, false);
+      }
+    };
+    // Fresh copy of this payment's rows, so writes hit the right rows.
+    const freshSeries = async () => {
+      await loadFixed();
+      const s = Calc.fixedSeries(state.fixed).find((x) => x.id === series.id);
+      if (!s) throw new Error("This payment changed in the sheet meanwhile. Please look again.");
+      return s;
+    };
+
+    document.getElementById("fx-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const name = v("fx-name");
+      const day = v("fx-day");
+      if (!name) { $err().textContent = "Give it a name."; return; }
+      if (day && !(Number.isInteger(Number(day)) && Number(day) >= 1 && Number(day) <= 31)) { $err().textContent = "Day must be 1–31."; return; }
+      const details = { name, owner: v("fx-owner"), paid_from: v("fx-paid"), day: day ? Number(day) : "" };
+      const btn = e.target.querySelector('[type="submit"]');
+      if (isNew) {
+        const amount = Calc.parseAmount(v("fx-amount"));
+        const from = Calc.normMonth(v("fx-from"));
+        if (!isFinite(amount) || amount <= 0) { $err().textContent = "Enter the monthly amount."; return; }
+        if (!from) { $err().textContent = "Choose the starting month."; return; }
+        run(btn, "Saving…", () => Sheets.appendRows("Fixed", [{
+          id: `f-${Date.now().toString(36)}`, ...details, amount, currency: v("fx-cur"), from_month: from, to_month: "", notes: "",
+        }]), "Fixed payment added");
+      } else {
+        run(btn, "Saving…", async () => {
+          const s = await freshSeries();
+          const cells = [];
+          s.versions.forEach((ver) => Object.entries(details).forEach(([field, value]) => cells.push({ row: ver.row._row, field, value })));
+          await Sheets.setCells("Fixed", (await Sheets.readTab("Fixed")).header, cells, "RAW");
+        }, "Saved");
+      }
+    });
+    if (isNew) return;
+
+    document.getElementById("fx-change").addEventListener("click", (e) => {
+      const amount = Calc.parseAmount(v("fx-new-amount"));
+      const from = Calc.normMonth(v("fx-new-from"));
+      if (!isFinite(amount) || amount <= 0) { $err().textContent = "Enter the new amount."; return; }
+      if (!from) { $err().textContent = "Choose the month the new amount starts."; return; }
+      run(e.target, "Saving…", async () => {
+        const s = await freshSeries();
+        const same = s.versions.find((ver) => ver.from === from);
+        const header = (await Sheets.readTab("Fixed")).header;
+        if (same) {
+          await Sheets.setCells("Fixed", header, [{ row: same.row._row, field: "amount", value: amount }], "RAW");
+        } else {
+          const hd = s.head;
+          await Sheets.appendRows("Fixed", [{
+            id: s.id, name: hd.name, amount, currency: norm(hd.currency).toUpperCase() || "ILS", owner: hd.owner,
+            paid_from: hd.paid_from, day: hd.day, from_month: from, to_month: "", notes: "",
+          }]);
+        }
+      }, `New amount from ${Calc.monthLabel(from, true)}`);
+    });
+    $sheetBody.querySelectorAll("[data-fx-del]").forEach((b) => b.addEventListener("click", () => {
+      const from = b.dataset.fxDel;
+      if (!confirm(`Delete the amount that starts in ${Calc.monthLabel(from, true)}?`)) return;
+      run(b, "…", async () => {
+        const s = await freshSeries();
+        const ver = s.versions.find((x) => x.from === from);
+        if (!ver || s.versions.length < 2) throw new Error("That amount changed in the sheet meanwhile. Please look again.");
+        await Sheets.deleteRows("Fixed", [ver.row._row]);
+      }, "Amount removed");
+    }));
+    const end = document.getElementById("fx-end");
+    if (end) end.addEventListener("click", () => {
+      const stop = Calc.normMonth(v("fx-stop"));
+      if (!stop) { $err().textContent = "Choose the last month it is paid."; return; }
+      run(end, "Saving…", async () => {
+        const s = await freshSeries();
+        await Sheets.setCells("Fixed", (await Sheets.readTab("Fixed")).header, [{ row: s.versions[s.versions.length - 1].row._row, field: "to_month", value: stop }], "RAW");
+      }, `Ends after ${Calc.monthLabel(stop, true)}`);
+    });
+    const resume = document.getElementById("fx-resume");
+    if (resume) resume.addEventListener("click", () => run(resume, "Saving…", async () => {
+      const s = await freshSeries();
+      const header = (await Sheets.readTab("Fixed")).header;
+      await Sheets.setCells("Fixed", header, s.versions.map((ver) => ({ row: ver.row._row, field: "to_month", value: "" })), "RAW");
+    }, "Payment continues"));
   }
 
   // ---------- Trends ----------
@@ -1218,11 +1474,20 @@
           </div>
         </li>`;
     }).join("");
-    const loansCard = loans.length ? `
+    // Other fixed payments (rent, parking…) in force this month, at your share.
+    const nowM = Calc.currentMonth();
+    let fixedSum = 0;
+    const fixedNow = Calc.fixedForMonth(state.fixed || [], nowM).filter((p) => myShare(p) > 0);
+    fixedNow.forEach((p) => {
+      const v = Calc.convert(p.amount * myShare(p), p.currency, cur, state.rates, nowM);
+      if (v == null) commitmentsKnown = false; else fixedSum += v;
+    });
+    const loansCard = loans.length || fixedNow.length ? `
       <div class="card stack">
-        <div class="spread"><div class="label">Loans</div><span class="label">${loans.length}</span></div>
-        <ul class="plain-list loan-list">${loanRows}</ul>
-        <div class="spread commit"><span>Fixed monthly commitments</span><span class="mono">${commitmentsKnown ? esc(fmtMoney(commitments, cur)) : "—"}</span></div>
+        <div class="spread"><div class="label">${loans.length ? "Loans & fixed payments" : "Fixed payments"}</div><a class="label link" href="#fixed">Manage ›</a></div>
+        ${loans.length ? `<ul class="plain-list loan-list">${loanRows}</ul>` : ""}
+        ${fixedNow.length ? `<div class="spread small"><span class="muted">${fixedNow.map((p) => esc(p.name)).join(", ")}</span><span class="mono">${esc(fmtMoney(fixedSum, cur))}</span></div>` : ""}
+        <div class="spread commit"><span>Fixed monthly commitments</span><span class="mono">${commitmentsKnown ? esc(fmtMoney(commitments + fixedSum, cur)) : "—"}</span></div>
       </div>` : "";
 
     $screen.innerHTML = `${head}
