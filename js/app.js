@@ -3,12 +3,12 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.02-6";
+  const APP_VERSION = "2026.10.02-7";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "loan", "home", "card"];
   const TYPE_LABEL = {
-    current: "Current", savings: "Savings", investment: "Investment", crypto: "Crypto",
+    current: "Bank", savings: "Savings", investment: "Investment", crypto: "Crypto",
     long_term: "Long-term", loan: "Loan", home: "Home", card: "Card",
   };
   const CURRENCIES = ["ILS", "USD", "EUR"];
@@ -584,7 +584,7 @@
     const idx = Calc.indexSnapshots(state.snapshots);
     const months = Calc.snapshotMonths(state.snapshots, state.accounts);
     const latestBal = months.balances[0] || null;
-    const accts = state.accounts.filter((a) => isActive(a) && lower(a.type) !== "card");
+    const accts = state.accounts.filter((a) => isActive(a) && lower(a.type) === "current"); // bank accounts only
     const head = `
       <div class="page-head">
         <div><div class="label">Status · ${Calc.monthLabel(nowM, true)}</div><h1>Banks</h1></div>
@@ -592,7 +592,7 @@
       <div class="cur-row">${curSegHtml()}</div>`;
     if (!accts.length) {
       $screen.innerHTML = `${head}
-        <div class="card empty stack"><p class="muted">No accounts yet. Add your bank accounts on the Accounts tab.</p>
+        <div class="card empty stack"><p class="muted">No bank accounts yet. Add them on the Accounts tab with type Bank.</p>
           <a class="btn block" href="#accounts">Go to Accounts</a></div>`;
       bindCurSeg();
       return;
@@ -661,7 +661,7 @@
     $screen.innerHTML = `${head}
       <div class="stack-lg">
         <div class="card hero stack">
-          <div class="label">All banks · latest balances</div>
+          <div class="label">All bank accounts · latest balances</div>
           <div class="big-number">${allNet != null ? esc(fmtMoney(allNet, cur)) : "—"}</div>
           <div class="spread small"><span>${updated} of ${monthly.length} updated for ${Calc.monthLabel(nowM, true)}</span>
             ${dueCount ? `<span class="chip warn">${dueCount} to update</span>` : updated === monthly.length ? `<span class="chip pos">Up to date</span>` : `<span class="chip">Nothing due yet</span>`}</div>
@@ -669,7 +669,7 @@
           ${dueCount ? `<a class="btn block" href="#update">Update now</a>` : ""}
         </div>
         ${bankCards}
-        <p class="muted small">Totals are net (loans subtracted) from each account's latest balance, converted with that month's rate. Cards are on the Cards tab. Green = updated this month, orange = due, grey = not due yet.</p>
+        <p class="muted small">Bank accounts only (savings, investments, pension, home and loans are on the Overview; cards on the Cards tab). Totals use each account's latest balance, converted with that month's rate. Green = updated this month, orange = due, grey = not due yet.</p>
       </div>`;
     Charts.bind($screen);
     bindCurSeg();
@@ -2242,7 +2242,7 @@
   // ---------- Bulk add ----------
 
   const BULK_EXAMPLE = [
-    "bank-a-cur | Bank A Current | Bank A | Country A | ILS | Joint | current | Alex | 5 |",
+    "bank-a-cur | Bank A Main | Bank A | Country A | ILS | Joint | bank | Alex | 5 |",
     "bank-b-sav | Bank B Savings | Bank B | Country B | USD | Sam | savings | Sam | 10 |",
     "card-x | Card X | Bank A | Country A | ILS | Alex | card | Alex | 12 | bank-a-cur",
   ].join("\n");
@@ -2285,7 +2285,8 @@
       const owner = matchName(c.owner, owners);
       if (!owner) problems.push({ col: "owner", msg: `Unknown owner "${c.owner}". Use ${owners.join(", ")}.` });
 
-      const type = lower(c.type).replace(/[\s-]+/g, "_");
+      let type = lower(c.type).replace(/[\s-]+/g, "_");
+      if (type === "bank") type = "current"; // "Bank" is the display name of type current
       if (!TYPES.includes(type)) problems.push({ col: "type", msg: `Unknown type "${c.type}".` });
 
       const updater = matchName(c.updater, names);
@@ -2323,7 +2324,7 @@
         </div>
         <p class="muted">One account per line, columns separated by <span class="mono">|</span>:</p>
         <div class="code">${BULK_COLUMNS.join(" | ")}</div>
-        <p class="muted" style="font-size:14px">Owner is ${esc([...personNames(), JOINT].join(", "))}. Type is one of ${TYPES.join(", ")}. The last column is only for cards and may be left empty.</p>
+        <p class="muted" style="font-size:14px">Owner is ${esc([...personNames(), JOINT].join(", "))}. Type is one of ${TYPES.map((t) => (t === "current" ? "bank (or current)" : t)).join(", ")}. The last column is only for cards and may be left empty.</p>
         <textarea id="bulk-text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="${esc(BULK_EXAMPLE)}">${esc(typeof prefill === "string" ? prefill : "")}</textarea>
         <button class="btn primary block" id="bulk-check">Check</button>
       </div>`);

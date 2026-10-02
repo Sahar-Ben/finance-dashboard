@@ -128,6 +128,8 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 
 2. **Changes exclude currency moves** (requested after Stage 4, replacing decision note 14). The Overview's "vs" and "since" lines and the Long-term view changes compute the earlier month's totals at the selected month's rate. A goal's change converts each account's previous balance at the rate of its latest month. Account, bank and import-preview changes were already in each account's own currency. Example: a home entered as €120,000 in January shows no change in October, even though the euro rose.
 
+3. **Banks tab shows bank accounts only, and type `current` is displayed as "Bank"** (requested after Stage 4). The Banks tab now lists only active accounts of type `current`: no savings, investments, pension, home or loans. The sheet still stores `current`; the screens, forms and charts call it "Bank". Bulk add accepts `bank` or `current`. This replaces the Banks description in point 1 where they differ: the totals no longer involve loans, and the status count covers only bank accounts.
+
 ## How to work
 
 Build one stage at a time. After each stage: update SPEC.md, commit, merge to main, and give a plain-language test checklist. Wait for the go-ahead before the next stage.
