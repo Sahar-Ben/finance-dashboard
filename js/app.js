@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.02-9";
+  const APP_VERSION = "2026.10.02-10";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "loan", "home", "card"];
@@ -1085,7 +1085,8 @@
     if (!state.ovMonth || !months.all.includes(state.ovMonth)) state.ovMonth = latestBal || months.all[0] || null;
     const month = state.ovMonth;
     const idx = Calc.indexSnapshots(state.snapshots);
-    const totalsFor = (m, rateMonth) => Calc.monthTotals(state.accounts, idx, m, cur, state.rates, latestBal, rateMonth);
+    // Personal view: own accounts in full, joint at 50%, the partner's own accounts left out.
+    const totalsFor = (m, rateMonth) => Calc.monthTotals(state.accounts, idx, m, cur, state.rates, latestBal, rateMonth, myShare);
 
     const due = dueItems();
     const head = `
@@ -1147,12 +1148,13 @@
     const incompleteChip = t.incomplete && t.hasBalances ? `<span class="chip neg">Incomplete</span>` : "";
     const hero = t.hasBalances ? `
       <div class="card hero stack">
-        <div class="spread"><div class="label">Reachable money · ${Calc.monthLabel(month, true)}</div>${incompleteChip}</div>
+        <div class="spread"><div class="label">My reachable money · ${Calc.monthLabel(month, true)}</div>${incompleteChip}</div>
         <div class="big-number">${fmtMoney(t.reachable, cur)}</div>
+        <div class="muted small">Your accounts in full + 50% of joint accounts</div>
         ${changes("reachable")}
       </div>
       <div class="card stack">
-        <div class="label">Long-term total</div>
+        <div class="label">My long-term total</div>
         <div class="mid-number">${fmtMoney(t.longTerm, cur)}</div>
         ${changes("longTerm")}
       </div>` : `
@@ -1194,21 +1196,22 @@
       </a>` : "";
 
     // Loans: remaining balance and monthly payment, plus the sum of payments across active loans.
-    const loans = state.accounts.filter((a) => lower(a.type) === "loan" && isActive(a));
+    const loans = state.accounts.filter((a) => lower(a.type) === "loan" && isActive(a) && myShare(a) > 0);
     let commitments = 0, commitmentsKnown = true;
     const loanRows = loans.map((a) => {
       const own = norm(a.currency).toUpperCase() || "ILS";
       const b = Calc.balanceFor(a, month, idx);
       const last = b ? { month, snap: b.snap } : Calc.latestSnapshot(idx, a.id);
-      const remaining = last ? Calc.parseAmount(last.snap.amount) : null;
-      const pay = norm(a.monthly_payment) !== "" ? Calc.parseAmount(a.monthly_payment) : null;
+      const f = myShare(a);
+      const remaining = last ? Calc.parseAmount(last.snap.amount) * f : null;
+      const pay = norm(a.monthly_payment) !== "" ? Calc.parseAmount(a.monthly_payment) * f : null;
       if (pay != null && isFinite(pay)) {
         const pc = Calc.convert(pay, own, cur, state.rates, Calc.currentMonth());
         if (pc == null) commitmentsKnown = false; else commitments += pc;
       }
       return `
         <li>
-          <div><div>${accountName(a)}</div><div class="muted small">${remaining != null ? `owed ${last.month !== month ? `(${Calc.monthLabel(last.month)})` : ""}` : "no balance yet"}</div></div>
+          <div><div>${accountName(a)}</div><div class="muted small">${remaining != null ? `owed ${last.month !== month ? `(${Calc.monthLabel(last.month)})` : ""}` : "no balance yet"}${f === 0.5 ? " · your 50%" : ""}</div></div>
           <div class="acct-right">
             <div class="mono neg">${remaining != null && isFinite(remaining) ? "−" + esc(fmtMoney(remaining, own)) : "—"}</div>
             <div class="acct-orig mono">${pay != null && isFinite(pay) ? `${esc(fmtMoney(pay, own))} / month` : "no payment set"}</div>

@@ -181,7 +181,8 @@
   // rate of `rateMonth` when given (used for comparisons, so currency moves don't count as change).
   // An active non-card account is expected from its first snapshot onward (or, if it has none yet,
   // from the latest month with balances); a missing expected balance marks the month incomplete.
-  function monthTotals(accounts, idx, month, display, rates, latestBalanceMonth, rateMonth) {
+  // `shareOf(account)` (optional) weights each account, e.g. 0.5 for joint; accounts weighted 0 are ignored.
+  function monthTotals(accounts, idx, month, display, rates, latestBalanceMonth, rateMonth, shareOf) {
     const byType = {};
     TYPES.forEach((t) => { byType[t] = 0; });
     const counts = {};
@@ -194,6 +195,8 @@
     accounts.forEach((a) => {
       const type = lower(a.type);
       if (!TYPES.includes(type)) return;
+      const share = shareOf ? shareOf(a) : 1;
+      if (!share) return;
       const b = balanceFor(a, month, idx);
       if (!b) {
         if (type === "card" || !isActive(a)) return;
@@ -205,7 +208,8 @@
       const amt = parseAmount(b.snap.amount);
       if (!isFinite(amt)) return;
       const cur = norm(b.snap.currency).toUpperCase() || norm(a.currency).toUpperCase();
-      const v = convert(Math.abs(amt), cur, display, rates, rateMonth || month);
+      const v0 = convert(Math.abs(amt), cur, display, rates, rateMonth || month);
+      const v = v0 == null ? null : v0 * share;
       if (v == null) { unconverted.push(a); return; }
       if (type === "card") { cards += v; cardCount++; return; }
       if (!b.carried) balances++;
