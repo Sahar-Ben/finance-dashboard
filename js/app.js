@@ -498,6 +498,7 @@
   const ICONS = {
     overview: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/></svg>',
     accounts: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18"/><path d="M7 15h4"/></svg>',
+    banks: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5L12 4l9 5.5"/><path d="M5 10v8M9.5 10v8M14.5 10v8M19 10v8"/><path d="M3 20h18"/></svg>',
     cards: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="16" height="12" rx="2.5"/><path d="M6 6V5a1 1 0 0 1 1-1h13a2 2 0 0 1 2 2v9a1 1 0 0 1-1 1h-3"/><path d="M5 14h3"/></svg>',
     trends: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>',
     more: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
@@ -505,6 +506,7 @@
   const TABS = [
     { id: "overview", label: "Overview", render: renderOverview },
     { id: "accounts", label: "Accounts", render: renderAccounts },
+    { id: "banks", label: "Banks", render: renderBanks },
     { id: "cards", label: "Cards", render: renderCards },
     { id: "trends", label: "Trends", render: renderTrends },
     { id: "more", label: "More", render: renderMore },
@@ -548,6 +550,132 @@
     location.hash = b.dataset.tab;
   });
   window.addEventListener("hashchange", () => { if (state.me) route(); });
+
+  // ---------- Banks: each institution's total and this month's update status ----------
+
+  // Update status of one account for the current month (home: for this year).
+  function updateStatus(a, idx, now) {
+    const nowM = Calc.currentMonth(now);
+    const day = now.getDate();
+    const id = norm(a.id);
+    const clamp = (d, m) => Math.min(Math.max(1, Number(d) || 1), Number(Calc.lastDayOfMonth(m).slice(8)));
+    if (lower(a.type) === "home") {
+      const um = Number(a.update_month);
+      if (!(um >= 1 && um <= 12)) return { kind: "info", text: "Yearly" };
+      const dueM = `${nowM.slice(0, 4)}-${String(um).padStart(2, "0")}`;
+      const done = (idx.byAccount.get(id) || []).find((x) => x.month >= dueM);
+      if (done) return { kind: "ok", text: `Updated ${shortDate(Calc.normDate(done.snap.as_of_date)) || Calc.monthLabel(done.month)}` };
+      if (nowM < dueM || (nowM === dueM && day < clamp(a.update_day, dueM))) return { kind: "info", text: `Yearly · ${MONTHS[um - 1]}` };
+      return { kind: "due", text: `Due since ${clamp(a.update_day, dueM)} ${MONTHS[um - 1]}` };
+    }
+    const s = idx.get(id, nowM);
+    if (s) return { kind: "ok", text: `Updated ${shortDate(Calc.normDate(s.as_of_date)) || ""}`.trim() };
+    const d = clamp(a.update_day, nowM);
+    const m = MONTHS[Number(nowM.slice(5)) - 1];
+    return day >= d ? { kind: "due", text: `Due since ${d} ${m}` } : { kind: "info", text: `Due ${d} ${m}` };
+  }
+
+  function renderBanks() {
+    const cur = state.displayCur;
+    const now = new Date();
+    const nowM = Calc.currentMonth(now);
+    const idx = Calc.indexSnapshots(state.snapshots);
+    const months = Calc.snapshotMonths(state.snapshots, state.accounts);
+    const latestBal = months.balances[0] || null;
+    const accts = state.accounts.filter((a) => isActive(a) && lower(a.type) !== "card");
+    const head = `
+      <div class="page-head">
+        <div><div class="label">Status · ${Calc.monthLabel(nowM, true)}</div><h1>Banks</h1></div>
+      </div>
+      <div class="cur-row">${curSegHtml()}</div>`;
+    if (!accts.length) {
+      $screen.innerHTML = `${head}
+        <div class="card empty stack"><p class="muted">No accounts yet. Add your bank accounts on the Accounts tab.</p>
+          <a class="btn block" href="#accounts">Go to Accounts</a></div>`;
+      bindCurSeg();
+      return;
+    }
+    const map = {};
+    accts.forEach((a) => { const k = norm(a.institution) || "No institution"; (map[k] = map[k] || []).push(a); });
+    const names = Object.keys(map).sort((x, y) => x.localeCompare(y));
+    const yearMonths = Calc.monthRange(`${nowM.slice(0, 4)}-01`, nowM);
+    const labels = yearMonths.map((m) => MONTHS[Number(m.slice(5)) - 1]);
+    const fmtTick = fmtTickFor(cur);
+
+    const statuses = new Map(accts.map((a) => [a.id, updateStatus(a, idx, now)]));
+    const monthly = accts.filter((a) => statuses.get(a.id).kind !== "info" || lower(a.type) !== "home");
+    const updated = monthly.filter((a) => statuses.get(a.id).kind === "ok").length;
+    const dueCount = accts.filter((a) => statuses.get(a.id).kind === "due").length;
+    const allNet = groupNet(accts, idx);
+
+    const bankCards = names.map((name) => {
+      const list = map[name].sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname)));
+      const net = groupNet(list, idx);
+      const T = yearMonths.map((m) => Calc.monthTotals(list, idx, m, cur, state.rates, latestBal));
+      const vals = T.map((t) => (t.hasBalances ? t.longTerm : null));
+      const inc = T.map((t) => t.hasBalances && t.incomplete);
+      // Change = each account's latest balance against its own previous month, added up (loans negative).
+      let chgSum = 0, chgAny = false;
+      list.forEach((a) => {
+        const info = latestInfo(a, idx);
+        if (!info || !info.delta) return;
+        const v = Calc.convert(info.delta.amount, info.own, cur, state.rates, info.month);
+        if (v == null) return;
+        chgSum += lower(a.type) === "loan" ? -v : v;
+        chgAny = true;
+      });
+      const chg = chgAny ? Calc.change(net, net - chgSum) : null;
+      const due = list.filter((a) => statuses.get(a.id).kind === "due").length;
+      const ok = list.filter((a) => statuses.get(a.id).kind === "ok").length;
+      const chip = due ? `<span class="chip warn">${due} to update</span>`
+        : ok === list.length ? `<span class="chip pos">All updated</span>` : `<span class="chip">Not due yet</span>`;
+      return `
+        <div class="card stack">
+          <div class="spread"><h3>${esc(name)}</h3>${chip}</div>
+          <div class="spread">
+            <div class="mid-number nowrap">${net != null ? esc(fmtMoney(net, cur)) : "—"}</div>
+            ${chg ? `<span class="mono small bank-chg ${toneOf(chg.amount)}">${fmtSigned(chg.amount, cur)} ${fmtPct(chg.pct)}<br><span class="muted">vs previous month</span></span>` : ""}
+          </div>
+          <div class="stack" style="gap:8px">
+            ${list.map((a) => {
+              const st = statuses.get(a.id);
+              const info = latestInfo(a, idx);
+              const type = lower(a.type);
+              return `
+                <button class="bank-acct" data-acct="${esc(a.id)}">
+                  <span class="status-dot ${st.kind}" aria-hidden="true"></span>
+                  <span class="body"><span class="name">${accountName(a)}</span>
+                    <span class="muted small">${esc(TYPE_LABEL[type] || type)} · ${esc(st.text)}${st.kind === "ok" ? "" : ` · by ${esc(a.updater)}`}</span></span>
+                  <span class="mono small ${type === "loan" ? "neg" : ""}">${info && isFinite(info.amount) ? `${type === "loan" ? "−" : ""}${esc(fmtMoney(info.amount, info.own))}` : "—"}</span>
+                </button>`;
+            }).join("")}
+          </div>
+          ${vals.some((v) => v != null) ? Charts.line({ labels, values: vals, incomplete: inc, fmtTick,
+            tips: T.map((t, i) => `${Calc.monthLabel(yearMonths[i], true)} · ${t.hasBalances ? fmtMoney(t.longTerm, cur) + (inc[i] ? " · incomplete" : "") : "no balances"}`),
+            ariaLabel: `${name} by month` }) : ""}
+        </div>`;
+    }).join("");
+
+    $screen.innerHTML = `${head}
+      <div class="stack-lg">
+        <div class="card hero stack">
+          <div class="label">All banks · latest balances</div>
+          <div class="big-number">${allNet != null ? esc(fmtMoney(allNet, cur)) : "—"}</div>
+          <div class="spread small"><span>${updated} of ${monthly.length} updated for ${Calc.monthLabel(nowM, true)}</span>
+            ${dueCount ? `<span class="chip warn">${dueCount} to update</span>` : updated === monthly.length ? `<span class="chip pos">Up to date</span>` : `<span class="chip">Nothing due yet</span>`}</div>
+          <div class="bar"><span style="width:${monthly.length ? Math.max(updated ? 2 : 0, (updated / monthly.length) * 100).toFixed(1) : 0}%"></span></div>
+          ${dueCount ? `<a class="btn block" href="#update">Update now</a>` : ""}
+        </div>
+        ${bankCards}
+        <p class="muted small">Totals are net (loans subtracted) from each account's latest balance, converted with that month's rate. Cards are on the Cards tab. Green = updated this month, orange = due, grey = not due yet.</p>
+      </div>`;
+    Charts.bind($screen);
+    bindCurSeg();
+    $screen.querySelectorAll("[data-acct]").forEach((b) => b.addEventListener("click", () => {
+      const a = state.accounts.find((x) => String(x.id) === b.dataset.acct);
+      if (a) openAccountDetail(a);
+    }));
+  }
 
   // ---------- Cards ----------
 

@@ -121,6 +121,10 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 5. Home-screen app: a web app manifest, a generic Neon Prism icon and the right meta tags, so it opens full screen from the iPhone home screen. The icon and name reveal nothing personal.
 6. Final pass: check every screen at iPhone width, add helpful empty states for an empty sheet, and search the repo for any personal data and remove it.
 
+## Changes agreed after the plan
+
+1. **Banks tab** (requested after Stage 4): the tab bar is now Overview, Accounts, **Banks**, Cards, Trends, More. Banks shows, per institution, the net total of the latest balances (loans subtracted, cards excluded), the change (each account's latest month against its own previous month, added up), every account with its **update status for the current month**, and a line chart of the bank's monthly net for this year. Status colours: green = updated this month (with the as-of date), orange = due (update_day has passed, no snapshot yet), grey = not due yet. A home is yearly (due from update_month/update_day). The top card shows the overall net, "N of M updated" for the month (homes not yet due are left out of the count), and an Update button when something is due. Tapping an account opens its detail.
+
 ## How to work
 
 Build one stage at a time. After each stage: update SPEC.md, commit, merge to main, and give a plain-language test checklist. Wait for the go-ahead before the next stage.
