@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.02-7";
+  const APP_VERSION = "2026.10.02-9";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "loan", "home", "card"];
@@ -577,6 +577,12 @@
     return day >= d ? { kind: "due", text: `Due since ${d} ${m}` } : { kind: "info", text: `Due ${d} ${m}` };
   }
 
+  // The signed-in person's share of an account: own in full, Joint half, the partner's not at all.
+  function myShare(a) {
+    const o = matchName(a.owner, [...personNames(), JOINT]) || JOINT;
+    return o === state.me.name ? 1 : o === JOINT ? 0.5 : 0;
+  }
+
   function renderBanks() {
     const cur = state.displayCur;
     const now = new Date();
@@ -609,6 +615,13 @@
     const updated = monthly.filter((a) => statuses.get(a.id).kind === "ok").length;
     const dueCount = accts.filter((a) => statuses.get(a.id).kind === "due").length;
     const allNet = groupNet(accts, idx);
+    let myNet = null;
+    accts.forEach((a) => {
+      const info = latestInfo(a, idx);
+      const f = myShare(a);
+      if (!f || !info || info.converted == null) return;
+      myNet = (myNet || 0) + info.converted * f;
+    });
 
     const bankCards = names.map((name) => {
       const list = map[name].sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname)));
@@ -661,8 +674,9 @@
     $screen.innerHTML = `${head}
       <div class="stack-lg">
         <div class="card hero stack">
-          <div class="label">All bank accounts · latest balances</div>
-          <div class="big-number">${allNet != null ? esc(fmtMoney(allNet, cur)) : "—"}</div>
+          <div class="label">My bank accounts · latest balances</div>
+          <div class="big-number">${myNet != null ? esc(fmtMoney(myNet, cur)) : "—"}</div>
+          <div class="muted small">Your accounts in full + 50% of joint accounts${allNet != null && allNet !== myNet ? ` · all accounts, full amounts: <span class="mono">${esc(fmtMoney(allNet, cur))}</span>` : ""}</div>
           <div class="spread small"><span>${updated} of ${monthly.length} updated for ${Calc.monthLabel(nowM, true)}</span>
             ${dueCount ? `<span class="chip warn">${dueCount} to update</span>` : updated === monthly.length ? `<span class="chip pos">Up to date</span>` : `<span class="chip">Nothing due yet</span>`}</div>
           <div class="bar"><span style="width:${monthly.length ? Math.max(updated ? 2 : 0, (updated / monthly.length) * 100).toFixed(1) : 0}%"></span></div>
@@ -717,18 +731,27 @@
       const own = norm(s.currency).toUpperCase() || norm(a.currency).toUpperCase();
       return display ? conv(v, own, m) : v;
     };
-    const combined = (m) => {
+    // The signed-in person's share of a card: own cards in full, joint cards half, the partner's cards not at all.
+    const shareOf = myShare;
+    const combined = (m, household) => {
       let sum = 0, any = false;
-      cards.forEach((a) => { const v = cardValue(a, m, true); if (v != null) { sum += v; any = true; } });
+      cards.forEach((a) => {
+        const f = household ? 1 : shareOf(a);
+        if (!f) return;
+        const v = cardValue(a, m, true);
+        if (v != null) { sum += v * f; any = true; }
+      });
       return any ? sum : null;
     };
     const avgOf = (vals) => { const v = vals.filter((x) => x != null); return v.length ? v.reduce((s, x) => s + x, 0) / v.length : null; };
 
-    const totals = yearMonths.map(combined);
-    const total = combined(month);
+    const totals = yearMonths.map((m) => combined(m, false));
+    const total = combined(month, false);
+    const household = combined(month, true);
     const avg = avgOf(totals);
-    const withData = cards.filter((a) => cardValue(a, month, false) != null);
-    const missing = cards.filter((a) => isActive(a) && cardValue(a, month, false) == null
+    const myCards = cards.filter((a) => shareOf(a) > 0);
+    const withData = myCards.filter((a) => cardValue(a, month, false) != null);
+    const missing = myCards.filter((a) => isActive(a) && cardValue(a, month, false) == null
       && (idx.firstMonth.get(norm(a.id)) || "9999") <= month);
 
     const owners = [...personNames(), JOINT];
@@ -763,6 +786,7 @@
               </div>
             </div>
             <div class="muted small mono">${Calc.monthLabel(month, true)}${cAvg != null ? ` · average ${esc(fmtMoney(cAvg, own))} / month in ${year}` : ""}</div>
+            ${shareOf(a) === 0.5 && v != null ? `<div class="muted small">Joint · your 50%: <span class="mono">${esc(fmtMoney(v / 2, own))}</span></div>` : ""}
             ${Charts.bars({ labels, values: vals, avg: cAvg, highlight: yearMonths.indexOf(month), fmtTick: fmtTickFor(own),
               tips: yearMonths.map((m, i) => `${Calc.monthLabel(m, true)} · ${vals[i] != null ? fmtMoney(vals[i], own) : "no total"}`), ariaLabel: `${norm(a.nickname)} by month` })}
           </div>`;
@@ -772,12 +796,13 @@
       <div class="stack-lg">
         ${sel}
         <div class="card hero stack">
-          <div class="label">All cards · ${Calc.monthLabel(month, true)}</div>
+          <div class="label">My cards · ${Calc.monthLabel(month, true)}</div>
           <div class="big-number">${esc(fmtMoney(total, cur))}</div>
-          <div class="muted small">${withData.length} card${withData.length === 1 ? "" : "s"}${avg != null ? ` · average ${esc(fmtMoney(avg, cur))} / month in ${year}` : ""}</div>
+          <div class="muted small">Your cards in full + 50% of joint cards · ${withData.length} card${withData.length === 1 ? "" : "s"}${avg != null ? ` · average ${esc(fmtMoney(avg, cur))} / month in ${year}` : ""}</div>
+          ${household != null && household !== total ? `<div class="muted small">All cards, full amounts: <span class="mono">${esc(fmtMoney(household, cur))}</span></div>` : ""}
           ${missing.length ? `<div class="muted small">Missing this month: ${missing.map(accountName).join(", ")}</div>` : ""}
           ${Charts.bars({ labels, values: totals, avg, highlight: yearMonths.indexOf(month), fmtTick: fmtTickFor(cur),
-            tips: yearMonths.map((m, i) => tip(m, totals[i])), ariaLabel: "All cards by month" })}
+            tips: yearMonths.map((m, i) => tip(m, totals[i])), ariaLabel: "My cards by month" })}
         </div>
         <div class="card stack">
           <div class="label">By owner · ${Calc.monthLabel(month, true)}</div>

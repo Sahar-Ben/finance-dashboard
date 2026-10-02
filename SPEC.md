@@ -130,6 +130,8 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 
 3. **Banks tab shows bank accounts only, and type `current` is displayed as "Bank"** (requested after Stage 4). The Banks tab now lists only active accounts of type `current`: no savings, investments, pension, home or loans. The sheet still stores `current`; the screens, forms and charts call it "Bank". Bulk add accepts `bank` or `current`. This replaces the Banks description in point 1 where they differ: the totals no longer involve loans, and the status count covers only bank accounts.
 
+4. **Personal share on Cards and Banks** (requested after Stage 4; a deliberate exception to decision note 15 for these two headline figures only). The top figure on the **Cards** tab ("My cards") and on the **Banks** tab ("My bank accounts") is the signed-in person's share: their own accounts in full, Joint accounts at 50%, the other person's own accounts left out. The full household amount is shown on a small line underneath. Everything else keeps full amounts: each card and each bank, the owner split, and all Overview and Trends totals. Joint cards also show "your 50%". The cards chart and average use the personal share.
+
 ## How to work
 
 Build one stage at a time. After each stage: update SPEC.md, commit, merge to main, and give a plain-language test checklist. Wait for the go-ahead before the next stage.
