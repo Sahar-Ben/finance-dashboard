@@ -14,6 +14,8 @@
     long_term: "#d55181", home: "#008300", loan: "#e66767",
   };
   const LINE_COLOR = "#A47BFF";
+  // Categorical slots in fixed order (validated against the panel colour); an entity keeps its slot.
+  const SERIES_COLORS = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"];
 
   function niceTicks(min, max, count) {
     if (min === max) { max = min + 1; }
@@ -21,10 +23,10 @@
     const step0 = span / Math.max(1, count);
     const mag = Math.pow(10, Math.floor(Math.log10(step0)));
     const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= step0) || 10 * mag;
-    const lo = Math.floor(min / step) * step;
+    const lo = Math.floor(min / step) * step || 0;
     const hi = Math.ceil(max / step) * step;
     const ticks = [];
-    for (let v = lo; v <= hi + step / 2; v += step) ticks.push(Math.round(v * 1e6) / 1e6);
+    for (let v = lo; v <= hi + step / 2; v += step) ticks.push(Math.round(v * 1e6) / 1e6 || 0); // "|| 0" avoids -0
     return { lo, hi, ticks };
   }
 
@@ -149,7 +151,8 @@
     }
     const svg = axis(y, t.ticks, o.fmtTick) + xLabels(o.labels, f) + marks + hits(n, f, o.tips);
     let def = -1;
-    for (let i = n - 1; i >= 0; i--) if (has[i]) { def = i; break; }
+    if (o.highlight != null && has[o.highlight]) def = o.highlight;
+    else for (let i = n - 1; i >= 0; i--) if (has[i]) { def = i; break; }
     return wrap(svg, o.tips, def, o.ariaLabel);
   }
 
@@ -178,5 +181,5 @@
     });
   }
 
-  window.Charts = { line, bars, stacked, bind, TYPE_COLORS, LINE_COLOR };
+  window.Charts = { line, bars, stacked, bind, TYPE_COLORS, LINE_COLOR, SERIES_COLORS };
 })();

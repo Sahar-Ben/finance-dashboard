@@ -143,6 +143,8 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
    - The Overview's **Fixed monthly commitments** = loan payments + fixed payments in force this month, at the personal share.
    - None of this changes reachable money or the long-term total; that money already shows when it leaves the bank accounts. It does not conflict with decision note 2: these are a few fixed amounts, not transactions.
 
+7. **Spending chart: Summary / Detail** (requested after change 6). A switch above the Spending chart, remembered on the device (`fd.spendDetail`). **Summary** stacks cards against fixed payments. **Detail** stacks one series per card, per fixed payment and per loan payment, all at the personal share. Order is fixed (cards, then fixed payments, then loans, each by name) so an item keeps its colour. Colours come from the validated categorical palette (`Charts.SERIES_COLORS`). With more than eight items, the smallest by year total fold into "Other". Tapping a month lists each item's amount. The chart opens on the selected month.
+
 ## How to work
 
 Build one stage at a time. After each stage: update SPEC.md, commit, merge to main, and give a plain-language test checklist. Wait for the go-ahead before the next stage.

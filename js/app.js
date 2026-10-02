@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.02-11";
+  const APP_VERSION = "2026.10.02-12";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "loan", "home", "card"];
@@ -852,6 +852,45 @@
       }).join("");
 
     const SPEND_COLORS = { cards: Charts.TYPE_COLORS.current, fixed: Charts.TYPE_COLORS.savings };
+    // Detail view: one series per card and per fixed/loan payment, at your share. Stable order
+    // (cards, then fixed payments, then loans, each by name) so an item keeps its colour.
+    const detail = LS.get("fd.spendDetail") === "1";
+    let chartSeries, legendHtml, chartTips;
+    if (detail) {
+      const items = [];
+      cards.filter((a) => shareOf(a) > 0).sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname))).forEach((a) => items.push({
+        name: norm(a.nickname) || a.id, values: yearMonths.map((m) => { const v = cardValue(a, m, true); return v == null ? null : v * shareOf(a); }),
+      }));
+      Calc.fixedSeries(state.fixed || []).filter((sr) => shareOf(sr.head) > 0).forEach((sr) => items.push({
+        name: norm(sr.head.name) || sr.id,
+        values: yearMonths.map((m) => { const p = Calc.fixedForMonth(state.fixed, m).find((x) => x.id === sr.id); const v = p ? conv(p.amount, p.currency, m) : null; return v == null ? null : v * shareOf(sr.head); }),
+      }));
+      const loanIds = [...new Set(yearMonths.flatMap((m) => loanPaymentsFor(m, idx).map((p) => p.id)))];
+      loanIds.map((id) => state.accounts.find((a) => a.id === id)).filter((a) => a && shareOf(a) > 0)
+        .sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname))).forEach((a) => items.push({
+          name: norm(a.nickname) || a.id,
+          values: yearMonths.map((m) => { const p = loanPaymentsFor(m, idx).find((x) => x.id === a.id); const v = p ? conv(p.amount, p.currency, m) : null; return v == null ? null : v * shareOf(a); }),
+        }));
+      // At most 8 colours: the smallest items (by year total) fold into "Other".
+      const yearSum = (it) => it.values.reduce((sm, v) => sm + (v || 0), 0);
+      let shown = items.filter((it) => yearSum(it) > 0);
+      if (shown.length > Charts.SERIES_COLORS.length) {
+        const keep = new Set([...shown].sort((x, y) => yearSum(y) - yearSum(x)).slice(0, Charts.SERIES_COLORS.length - 1));
+        const rest = shown.filter((it) => !keep.has(it));
+        shown = shown.filter((it) => keep.has(it));
+        shown.push({ name: "Other", values: yearMonths.map((_, i) => { const v = rest.reduce((sm, it) => sm + (it.values[i] || 0), 0); return v || null; }) });
+      }
+      chartSeries = shown.map((it, k) => ({ key: it.name, color: Charts.SERIES_COLORS[k], values: it.values }));
+      legendHtml = shown.map((it, k) => `<span class="key"><i style="background:${Charts.SERIES_COLORS[k]}"></i>${esc(it.name)}</span>`).join("");
+      chartTips = yearMonths.map((m, i) => {
+        const parts = shown.filter((it) => it.values[i]).map((it) => `${it.name} ${fmtMoney(it.values[i], cur)}`);
+        return `${Calc.monthLabel(m, true)} · ${totals[i] != null ? fmtMoney(totals[i], cur) : "nothing recorded"}${parts.length ? ` · ${parts.join(" · ")}` : ""}`;
+      });
+    } else {
+      chartSeries = [{ key: "cards", color: SPEND_COLORS.cards, values: cardSeries }, { key: "fixed", color: SPEND_COLORS.fixed, values: fixedSeriesV }];
+      legendHtml = `<span class="key"><i style="background:${SPEND_COLORS.cards}"></i>Cards</span><span class="key"><i style="background:${SPEND_COLORS.fixed}"></i>Fixed payments</span>`;
+      chartTips = yearMonths.map((m, i) => `${Calc.monthLabel(m, true)} · ${totals[i] != null ? `${fmtMoney(totals[i], cur)} (cards ${fmtMoney(cardSeries[i] || 0, cur)}, fixed ${fmtMoney(fixedSeriesV[i] || 0, cur)})` : "nothing recorded"}`);
+    }
     $screen.innerHTML = `${head}
       <div class="stack-lg">
         ${sel}
@@ -862,13 +901,15 @@
           <div class="muted small">Your own in full + 50% of joint${avg != null ? ` · average ${esc(fmtMoney(avg, cur))} / month in ${year}` : ""}</div>
           ${household != null && household !== total ? `<div class="muted small">Household, full amounts: <span class="mono">${esc(fmtMoney(household, cur))}</span></div>` : ""}
           ${missing.length ? `<div class="muted small">Card totals missing this month: ${missing.map(accountName).join(", ")}</div>` : ""}
+          <div class="seg seg-sm" id="sp-view" style="align-self:flex-start">
+            <button type="button" data-view="0" aria-pressed="${!detail}">SUMMARY</button>
+            <button type="button" data-view="1" aria-pressed="${detail}">DETAIL</button>
+          </div>
           ${Charts.stacked({
-            labels, fmtTick: fmtTickFor(cur),
-            series: [{ key: "cards", color: SPEND_COLORS.cards, values: cardSeries }, { key: "fixed", color: SPEND_COLORS.fixed, values: fixedSeriesV }],
-            tips: yearMonths.map((m, i) => `${Calc.monthLabel(m, true)} · ${totals[i] != null ? `${fmtMoney(totals[i], cur)} (cards ${fmtMoney(cardSeries[i] || 0, cur)}, fixed ${fmtMoney(fixedSeriesV[i] || 0, cur)})` : "nothing recorded"}`),
-            ariaLabel: "My spending by month",
+            labels, fmtTick: fmtTickFor(cur), series: chartSeries, tips: chartTips, highlight: yearMonths.indexOf(month),
+            ariaLabel: detail ? "My spending by card and payment" : "My spending by month",
           })}
-          <div class="legend"><span class="key"><i style="background:${SPEND_COLORS.cards}"></i>Cards</span><span class="key"><i style="background:${SPEND_COLORS.fixed}"></i>Fixed payments</span></div>
+          <div class="legend">${legendHtml}</div>
         </div>
         ${fixedCard}
         ${cards.length ? `
@@ -889,6 +930,12 @@
     Charts.bind($screen);
     bindCurSeg();
     const go = (m) => { state.cardMonth = m; const y = window.scrollY; renderCards(); window.scrollTo(0, y); };
+    document.getElementById("sp-view").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-view]");
+      if (!b) return;
+      LS.set("fd.spendDetail", b.dataset.view);
+      const y = window.scrollY; renderCards(); window.scrollTo(0, y);
+    });
     document.getElementById("cd-month").addEventListener("change", (e) => go(e.target.value));
     document.getElementById("cd-prev").addEventListener("click", () => go(allMonths[allMonths.indexOf(month) + 1]));
     document.getElementById("cd-next").addEventListener("click", () => go(allMonths[allMonths.indexOf(month) - 1]));
