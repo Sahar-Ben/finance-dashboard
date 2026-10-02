@@ -152,6 +152,8 @@ Build one stage at a time. After each stage: update SPEC.md, commit, merge to ma
 
 ### Hosting
 
+Every script and stylesheet is loaded with `?v=<APP_VERSION>`, and `APP_VERSION` (in `js/app.js`, shown at the bottom of More) is bumped with each change. That way phones, including home-screen apps, fetch the new files instead of a saved copy.
+
 GitHub Pages serves the `main` branch root. The allowed JavaScript origin for the OAuth client is the Pages origin (`https://<github-user>.github.io`, lowercase, no path).
 
 ### Device storage (localStorage, never in the repo)

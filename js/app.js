@@ -2,6 +2,8 @@
 (function () {
   "use strict";
 
+  // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
+  const APP_VERSION = "2026.10.02-6";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "loan", "home", "card"];
@@ -1624,6 +1626,7 @@
           <button class="btn ghost block" id="set-forget">Use a different sheet</button>
         </div>
         <button class="btn danger block" id="set-signout">Sign out</button>
+        <p class="muted small mono" style="text-align:center">App version ${APP_VERSION}</p>
       </div>`;
     bindPeopleForm(false);
     document.getElementById("set-hide").addEventListener("click", () => setHideAmounts(!state.hideAmounts));
