@@ -28,6 +28,7 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
+html, body { overflow-x: hidden; }
 body {
   margin: 0;
   min-height: 100vh;
@@ -76,7 +77,9 @@ p { margin: 0; }
 .pos { color: var(--pos); }
 .neg { color: var(--neg); }
 
-.page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin: 8px 0 20px; }
+.page-head { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 8px 0 20px; }
+.page-head > div:first-child { min-width: 0; }
+.cur-row { display: flex; justify-content: flex-end; margin: -8px 0 16px; }
 .page-head .label { margin-bottom: 6px; }
 .stack { display: flex; flex-direction: column; gap: 12px; }
 .stack-lg { display: flex; flex-direction: column; gap: 20px; }
@@ -260,6 +263,42 @@ a.type-card { color: inherit; text-decoration: none; }
 .legend { display: flex; flex-wrap: wrap; gap: 8px 14px; font-size: 12px; color: var(--muted); }
 .legend .key { display: inline-flex; align-items: center; gap: 6px; }
 .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+/* Stage 4: header eye, due list, goals, lock */
+.page-head .head-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.icon-btn.eye svg { width: 20px; height: 20px; }
+.icon-btn.eye[aria-pressed="true"] { color: var(--accent-2); border-color: rgba(157, 107, 255, 0.5); }
+.badge-host { position: relative; }
+.badge {
+  position: absolute; top: -7px; right: -7px; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px;
+  background: var(--neg); color: #fff; font-family: var(--mono); font-size: 12px; font-weight: 700;
+  display: grid; place-items: center; box-shadow: 0 0 0 2px var(--bg);
+}
+.due-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; text-align: left;
+  background: #0D0B16; border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; color: inherit; font: inherit; cursor: pointer;
+}
+.due-item > span:first-child { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.due-name { font-weight: 600; }
+.goal {
+  display: flex; flex-direction: column; gap: 8px; width: 100%; text-align: left; color: inherit; font: inherit;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 20px; padding: 16px; cursor: pointer;
+}
+.goal.inactive { opacity: 0.5; }
+.goal-bar { height: 8px; border-radius: 4px; }
+.link { color: var(--accent-2); text-decoration: none; }
+a.link-card { color: inherit; text-decoration: none; }
+.check-list { display: flex; flex-direction: column; gap: 8px; }
+.check { display: flex; gap: 12px; align-items: flex-start; background: #0D0B16; border: 1px solid var(--border); border-radius: 14px; padding: 12px; cursor: pointer; }
+.check input { width: 22px; height: 22px; min-height: 0; padding: 0; margin: 2px 0 0; flex: none; accent-color: var(--accent); -webkit-appearance: checkbox; appearance: auto; }
+.check > span { display: flex; flex-direction: column; gap: 2px; }
+.warn-text { color: var(--warn); }
+.lock {
+  position: fixed; inset: 0; z-index: 90; background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  padding: calc(var(--safe-top) + 24px) calc(var(--safe-right) + 20px) calc(var(--safe-bottom) + 24px) calc(var(--safe-left) + 20px);
+}
+.lock-inner { width: 100%; max-width: 420px; display: flex; flex-direction: column; gap: 22px; }
 
 /* Update */
 .chip.warn { color: var(--warn); border-color: rgba(255, 197, 107, 0.45); }

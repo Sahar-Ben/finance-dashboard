@@ -43,6 +43,8 @@
     ovMonth: null,      // month shown on the Overview
     imp: { text: "", rows: null },  // import box contents, kept while moving around the app
     manualShowAll: false,
+    goals: [],
+    hideAmounts: LS.get("fd.hideAmounts") === "1",
     signInMessage: "",
   };
 
@@ -54,6 +56,7 @@
   const $toast = document.getElementById("toast");
   const $reauth = document.getElementById("reauth");
   const $offline = document.getElementById("offline");
+  const $lock = document.getElementById("lock");
 
   // ---------- helpers ----------
 
@@ -258,6 +261,7 @@
       LS.set("fd.lastEmail", state.email);
       saveToken();
       state.signInMessage = "";
+      $lock.hidden = true; // a Google sign-in always opens the app, even when Face ID is on
     } catch (e) {
       clearToken();
       return fail(friendlyError(e));
@@ -350,9 +354,10 @@
   }
 
   async function loadData() {
-    const [settings, accounts, snaps, rates] = await Promise.all([
-      Sheets.readSettings(), Sheets.readTab("Accounts"), Sheets.readTab("Snapshots"), Sheets.readTab("Rates"),
+    const [settings, accounts, snaps, rates, goals] = await Promise.all([
+      Sheets.readSettings(), Sheets.readTab("Accounts"), Sheets.readTab("Snapshots"), Sheets.readTab("Rates"), Sheets.readTab("Goals"),
     ]);
+    state.goals = goals.rows;
     state.settings = settings;
     state.accounts = accounts.rows;
     setSnapshots(snaps);
@@ -506,7 +511,10 @@
   ];
 
   // Screens reached from a button rather than the tab bar; `tab` is the tab shown as current.
-  const SUBSCREENS = { update: { tab: "overview", render: () => renderUpdate() } };
+  const SUBSCREENS = {
+    update: { tab: "overview", render: () => renderUpdate() },
+    goals: { tab: "more", render: () => renderGoals() },
+  };
 
   function currentRoute() {
     const h = location.hash.replace("#", "");
@@ -550,8 +558,8 @@
     const head = `
       <div class="page-head">
         <div><div class="label">Spending</div><h1>Cards</h1></div>
-        ${curSegHtml()}
-      </div>`;
+      </div>
+      <div class="cur-row">${curSegHtml()}</div>`;
     const cardMonths = [...new Set(state.snapshots.filter((s) => cardIds.has(norm(s.account_id)))
       .map((s) => Calc.normMonth(s.month)).filter(Boolean))].sort().reverse();
     if (!cards.length || !cardMonths.length) {
@@ -692,8 +700,8 @@
     $screen.innerHTML = `
       <div class="page-head">
         <div><div class="label">History</div><h1>Trends</h1></div>
-        ${curSegHtml()}
       </div>
+      <div class="cur-row">${curSegHtml()}</div>
       <div class="stack-lg">
         <div class="seg" id="tr-period">${Object.entries(PERIODS).map(([k, l]) =>
           `<button type="button" data-period="${k}" aria-pressed="${k === period}">${l.toUpperCase()}</button>`).join("")}</div>
@@ -732,8 +740,10 @@
 
   // ---------- money formatting ----------
 
+  const MASK = "•••••";
   function fmtMoney(v, cur, decimals) {
     if (v == null || !isFinite(v)) return "—";
+    if (state.hideAmounts) return MASK;
     try {
       return new Intl.NumberFormat("en-US", {
         style: "currency", currency: cur, minimumFractionDigits: 0, maximumFractionDigits: decimals ? 2 : 0,
@@ -921,17 +931,23 @@
     const idx = Calc.indexSnapshots(state.snapshots);
     const totalsFor = (m) => Calc.monthTotals(state.accounts, idx, m, cur, state.rates, latestBal);
 
+    const due = dueItems();
     const head = `
       <div class="page-head">
         <div><div class="label">Hi, ${esc(state.me.name)}</div><h1>Overview</h1></div>
-        <a class="btn primary small" href="#update">Update</a>
+        <a class="btn primary small badge-host" href="#update">Update${due.length ? `<span class="badge" aria-label="${due.length} due">${due.length}</span>` : ""}</a>
       </div>`;
+    const goals = (state.goals || []).filter(goalsActive);
+    const goalsSection = goals.length ? `
+      <div><div class="group-title"><span class="label">Goals</span><a class="label link" href="#goals">Manage ›</a></div>
+        <div class="stack">${goals.map((g) => goalCardHtml(g, true)).join("")}</div></div>` : "";
     const curSeg = `<div class="seg seg-sm" id="ov-cur">${CURRENCIES.map((c) =>
       `<button type="button" data-cur="${c}" aria-pressed="${c === cur}">${c}</button>`).join("")}</div>`;
 
     if (!month) {
       $screen.innerHTML = `${head}
         <div class="stack-lg">
+          ${dueCardHtml(due)}
           <div class="card hero stack">
             <div class="label">Reachable money</div>
             <div class="big-number muted">—</div>
@@ -939,6 +955,7 @@
             <a class="btn primary block" href="#update">Add balances</a>
           </div>
         </div>`;
+      bindDue(due);
       return;
     }
 
@@ -1051,6 +1068,7 @@
 
     $screen.innerHTML = `${head}
       <div class="stack-lg">
+        ${dueCardHtml(due)}
         <div class="row ov-controls">${sel}${curSeg}</div>
         ${state.ratesPending ? `<p class="muted small">Fetching exchange rates…</p>` : ""}
         ${rateNoticesHtml(months.all)}
@@ -1058,6 +1076,7 @@
         ${missing}
         ${typeCards || cardsCard ? `<div><div class="group-title"><span class="label">Long-term view</span><span class="label">vs ${Calc.monthLabel(prevM)}</span></div><div class="type-grid">${typeCards}${cardsCard}</div></div>` : ""}
         ${loansCard}
+        ${goalsSection}
       </div>`;
 
     const go = (m) => { state.ovMonth = m; route(); };
@@ -1072,6 +1091,8 @@
       route();
     });
     bindRateNotices(months.all);
+    bindDue(due);
+    $screen.querySelectorAll("[data-goal]").forEach((b) => b.addEventListener("click", () => { location.hash = "goals"; }));
   }
 
   // ---------- Update: import box, manual form, account list ----------
@@ -1455,6 +1476,17 @@
           <div class="spread"><h3>${esc(state.me.name)}</h3><span class="chip accent">${state.me.key === "p1" ? "Person 1" : "Person 2"}</span></div>
           <p class="muted mono" style="font-size:13px; word-break:break-all">${esc(state.email)}</p>
         </div>
+        <a class="card stack link-card" href="#goals">
+          <div class="spread"><div class="label">Goals</div><span class="chev">›</span></div>
+          <p class="muted small">${(state.goals || []).filter(goalsActive).length} active goal${(state.goals || []).filter(goalsActive).length === 1 ? "" : "s"}. Add, edit or deactivate goals.</p>
+        </a>
+        <div class="card stack">
+          <div class="label">Privacy</div>
+          <div class="spread"><span>Hide amounts</span>
+            <button type="button" class="btn small" id="set-hide">${state.hideAmounts ? "Show amounts" : "Hide amounts"}</button></div>
+          <p class="muted small">Replaces every amount with dots on this device, including charts. The eye button at the top of each screen does the same.</p>
+        </div>
+        <div id="lock-settings"></div>
         ${peopleFormHtml()}
         <div class="card stack">
           <div class="label">Sheet</div>
@@ -1465,6 +1497,13 @@
         <button class="btn danger block" id="set-signout">Sign out</button>
       </div>`;
     bindPeopleForm(false);
+    document.getElementById("set-hide").addEventListener("click", () => setHideAmounts(!state.hideAmounts));
+    lockSettingsHtml().then((html) => {
+      const host = document.getElementById("lock-settings");
+      if (!host) return;
+      host.innerHTML = html;
+      bindLockSettings();
+    });
     document.getElementById("set-signout").addEventListener("click", signOut);
     document.getElementById("set-forget").addEventListener("click", () => {
       if (confirm("Forget this sheet on this device? Nothing in the sheet is deleted.")) forgetSheet();
@@ -1650,6 +1689,7 @@
 
   function fmtTickFor(cur) {
     return (v) => {
+      if (state.hideAmounts) return "•••";
       try {
         return new Intl.NumberFormat("en-US", { style: "currency", currency: cur, notation: "compact", maximumFractionDigits: 1 }).format(v);
       } catch (_) { return String(Math.round(v)); }
@@ -1685,8 +1725,8 @@
     $screen.innerHTML = `
       <div class="page-head">
         <div><div class="label">${active.length} active</div><h1>Accounts</h1></div>
-        ${curSegHtml()}
       </div>
+      <div class="cur-row">${curSegHtml()}</div>
       <div class="stack">
         <div class="row">
           <button class="btn primary" id="acct-add" style="flex:1">+ Add</button>
@@ -2221,6 +2261,324 @@
     });
   }
 
+  // ---------- Hide amounts (eye button in every page header) ----------
+
+  const EYE_OPEN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const EYE_SHUT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.1A10.8 10.8 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.5 7 10 7c1.7 0 3.2-.5 4.5-1.2"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
+
+  // Adds the eye button to the page header after any render.
+  function decorateHead() {
+    const ph = $screen.querySelector(".page-head");
+    if (!ph || ph.querySelector("[data-eye]") || $tabbar.hidden) return;
+    const actions = document.createElement("div");
+    actions.className = "head-actions";
+    [...ph.children].slice(1).forEach((el) => actions.appendChild(el));
+    actions.insertAdjacentHTML("afterbegin", `<button type="button" class="icon-btn eye" data-eye
+      aria-label="${state.hideAmounts ? "Show amounts" : "Hide amounts"}" aria-pressed="${state.hideAmounts}">${state.hideAmounts ? EYE_SHUT : EYE_OPEN}</button>`);
+    ph.appendChild(actions);
+  }
+  new MutationObserver(decorateHead).observe($screen, { childList: true });
+
+  function setHideAmounts(on) {
+    state.hideAmounts = on;
+    LS.set("fd.hideAmounts", on ? "1" : "0");
+    refreshBehindSheet();
+  }
+  $screen.addEventListener("click", (e) => {
+    if (e.target.closest("[data-eye]")) setHideAmounts(!state.hideAmounts);
+  });
+
+  // ---------- Due now ----------
+
+  function dueItems() {
+    if (!state.me) return [];
+    return Calc.dueList(state.accounts, Calc.indexSnapshots(state.snapshots), state.me.name, new Date());
+  }
+
+  function openManualFor(accountId, month) {
+    state.updateMode = "manual";
+    state.manualShowAll = true;
+    state.manualDraft = {
+      account_id: accountId, month,
+      as_of_date: month === Calc.currentMonth() ? Calc.today() : Calc.lastDayOfMonth(month),
+    };
+    closeSheet();
+    if (currentRoute() === "update") route(); else location.hash = "update";
+  }
+
+  const DUE_SHOWN = 3;
+  function dueCardHtml(due) {
+    if (!due.length) return "";
+    const item = (d, i) => `
+      <button class="due-item" data-due="${i}">
+        <span><span class="due-name">${accountName(d.account)}</span>
+          <span class="muted small mono">${Calc.monthLabel(d.month, true)} · ${esc(TYPE_LABEL[lower(d.account.type)] || d.account.type)}</span></span>
+        <span class="row">${d.overdue ? `<span class="chip neg">Overdue</span>` : `<span class="chip warn">Due</span>`}<span class="chev">›</span></span>
+      </button>`;
+    const over = due.filter((d) => d.overdue).length;
+    return `
+      <div class="card notice stack">
+        <div class="spread"><div class="label">Due now · ${due.length}</div>${over ? `<span class="chip neg">${over} overdue</span>` : ""}</div>
+        <div class="stack" style="gap:8px">${due.slice(0, DUE_SHOWN).map(item).join("")}</div>
+        ${due.length > DUE_SHOWN ? `<details class="due-more"><summary class="link-btn">Show all ${due.length}</summary>
+          <div class="stack" style="gap:8px; margin-top:8px">${due.slice(DUE_SHOWN).map((d, i) => item(d, i + DUE_SHOWN)).join("")}</div></details>` : ""}
+      </div>`;
+  }
+
+  function bindDue(due) {
+    $screen.querySelectorAll("[data-due]").forEach((b) => b.addEventListener("click", () => {
+      const d = due[Number(b.dataset.due)];
+      openManualFor(d.account.id, d.month);
+    }));
+  }
+
+  // ---------- Goals ----------
+
+  function goalsActive(g) { return Calc.isActive(g); }
+
+  function goalProgressOf(g) {
+    return Calc.goalProgress(g, state.accounts, Calc.indexSnapshots(state.snapshots), state.rates);
+  }
+
+  function goalCardHtml(g, compact) {
+    const p = goalProgressOf(g);
+    const pct = p.pct == null ? 0 : p.pct;
+    return `
+      <button class="goal ${compact ? "compact" : ""} ${goalsActive(g) ? "" : "inactive"}" data-goal="${esc(g.id)}">
+        <div class="spread"><strong>${esc(g.name || g.id)}</strong><span class="mono small">${p.pct == null ? "—" : `${pct.toFixed(0)}%`}</span></div>
+        <div class="bar goal-bar"><span style="width:${Math.max(pct > 0 ? 2 : 0, Math.min(100, pct)).toFixed(1)}%"></span></div>
+        <div class="spread small">
+          <span class="mono">${esc(fmtMoney(p.value, p.cur))} <span class="muted">of ${esc(fmtMoney(p.target, p.cur))}</span></span>
+          <span class="mono ${p.remaining === 0 ? "pos" : "muted"}">${p.remaining === 0 ? "reached" : `${esc(fmtMoney(p.remaining, p.cur))} to go`}</span>
+        </div>
+        ${compact ? "" : `<div class="spread small">
+          <span class="muted">${p.linked.length} account${p.linked.length === 1 ? "" : "s"}${p.missing.length ? ` · ${p.missing.length} unknown id` : ""}</span>
+          <span class="mono ${toneOf(p.change)}">${p.change == null ? "no change data" : `${fmtSigned(p.change, p.cur)} since last month`}</span>
+        </div>`}
+      </button>`;
+  }
+
+  async function loadGoals() {
+    state.goals = (await Sheets.readTab("Goals")).rows;
+  }
+
+  function renderGoals() {
+    const goals = state.goals || [];
+    const active = goals.filter(goalsActive);
+    const inactive = goals.filter((g) => !goalsActive(g));
+    $screen.innerHTML = `
+      <div class="page-head">
+        <div><div class="label">More</div><h1>Goals</h1></div>
+        <a class="btn small" href="#more">Back</a>
+      </div>
+      <div class="stack-lg">
+        <button class="btn primary block" id="goal-add">+ New goal</button>
+        ${active.length ? `<div class="stack">${active.map((g) => goalCardHtml(g, false)).join("")}</div>`
+          : `<div class="card empty stack"><p class="muted">No goals yet. A goal has a target amount and one or more linked accounts; its progress comes from their latest balances.</p></div>`}
+        ${inactive.length ? `<details><summary class="group-title"><span class="label">Inactive (${inactive.length}) ▾</span></summary>
+          <div class="stack">${inactive.map((g) => goalCardHtml(g, false)).join("")}</div></details>` : ""}
+      </div>`;
+    document.getElementById("goal-add").addEventListener("click", () => openGoalForm(null));
+    $screen.querySelectorAll("[data-goal]").forEach((b) => b.addEventListener("click", () => {
+      const g = goals.find((x) => String(x.id) === b.dataset.goal);
+      if (g) openGoalForm(g);
+    }));
+  }
+
+  function openGoalForm(goal) {
+    const isNew = !goal;
+    const g = goal || { currency: state.displayCur, account_ids: "", active: true };
+    const chosen = new Set(Calc.splitIds(g.account_ids).map(lower));
+    const accts = state.accounts.filter((a) => (isActive(a) || chosen.has(lower(a.id))) && lower(a.type) !== "card")
+      .sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname)));
+    // Accounts already linked to another active goal (allowed, but worth a warning).
+    const otherUse = new Map();
+    (state.goals || []).filter((o) => goalsActive(o) && o.id !== g.id).forEach((o) => {
+      Calc.splitIds(o.account_ids).forEach((id) => {
+        const k = lower(id);
+        if (!otherUse.has(k)) otherUse.set(k, []);
+        otherUse.get(k).push(o.name || o.id);
+      });
+    });
+    const cur = norm(g.currency).toUpperCase() || "ILS";
+    openSheet(`
+      <form id="goal-form" class="stack-lg" novalidate>
+        <div class="spread"><div><div class="label">${isNew ? "New goal" : "Edit goal"}</div><h2>${isNew ? "Add a goal" : esc(g.name)}</h2></div>
+          <button type="button" class="icon-btn" data-close aria-label="Close">✕</button></div>
+        <div class="field"><label class="label" for="gf-name">Name</label><input id="gf-name" value="${esc(g.name)}" autocomplete="off" placeholder="Emergency fund"></div>
+        <div class="field-row">
+          <div class="field"><label class="label" for="gf-target">Target amount</label><input id="gf-target" type="text" inputmode="decimal" value="${esc(g.target_amount)}" placeholder="100,000"></div>
+          <div class="field"><label class="label" for="gf-cur">Currency</label><select id="gf-cur">${options(CURRENCIES, cur)}</select></div>
+        </div>
+        <div class="field"><span class="label">Linked accounts</span>
+          <div class="check-list">${accts.map((a) => {
+            const used = otherUse.get(lower(a.id));
+            return `<label class="check"><input type="checkbox" value="${esc(a.id)}" ${chosen.has(lower(a.id)) ? "checked" : ""}>
+              <span><span>${accountName(a)}</span><span class="muted small mono">${esc(TYPE_LABEL[lower(a.type)] || a.type)} · ${esc(norm(a.currency).toUpperCase())}</span>
+              ${used ? `<span class="warn-text small">Also in: ${used.map(esc).join(", ")}</span>` : ""}</span></label>`;
+          }).join("") || `<p class="muted">No accounts yet.</p>`}</div>
+          <span class="hint">Progress is the sum of these accounts' latest balances (a loan counts as negative).</span></div>
+        <p class="err-text" id="gf-err"></p>
+        <button class="btn primary block" type="submit">${isNew ? "Add goal" : "Save changes"}</button>
+        ${isNew ? "" : `<button class="btn ${goalsActive(g) ? "danger" : ""} block" type="button" id="gf-toggle">${goalsActive(g) ? "Deactivate goal" : "Reactivate goal"}</button>`}
+      </form>`);
+    const form = document.getElementById("goal-form");
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const $err = document.getElementById("gf-err");
+      const name = norm(document.getElementById("gf-name").value);
+      const target = Calc.parseAmount(document.getElementById("gf-target").value);
+      const ids = [...form.querySelectorAll(".check input:checked")].map((x) => x.value);
+      if (!name) { $err.textContent = "Give the goal a name."; return; }
+      if (!isFinite(target) || target <= 0) { $err.textContent = "Enter a target amount above zero."; return; }
+      if (!ids.length) { $err.textContent = "Link at least one account."; return; }
+      const obj = { name, target_amount: target, currency: document.getElementById("gf-cur").value, account_ids: ids.join(",") };
+      const btn = form.querySelector('[type="submit"]');
+      setBusy(btn, true, "Saving…");
+      try {
+        await guarded(async () => {
+          if (isNew) await Sheets.appendRows("Goals", [{ id: `g-${Date.now().toString(36)}`, ...obj, active: true }]);
+          else await Sheets.updateRow("Goals", "id", g.id, obj);
+          await loadGoals();
+        });
+        closeSheet();
+        toast(isNew ? "Goal added" : "Goal saved");
+        route();
+      } catch (ex) {
+        $err.textContent = friendlyError(ex);
+        setBusy(btn, false);
+      }
+    });
+    const toggle = document.getElementById("gf-toggle");
+    if (toggle) toggle.addEventListener("click", async () => {
+      setBusy(toggle, true, "Saving…");
+      try {
+        await guarded(async () => {
+          await Sheets.updateRow("Goals", "id", g.id, { active: !goalsActive(g) });
+          await loadGoals();
+        });
+        closeSheet();
+        toast(goalsActive(g) ? "Goal deactivated" : "Goal reactivated");
+        route();
+      } catch (ex) {
+        document.getElementById("gf-err").textContent = friendlyError(ex);
+        setBusy(toggle, false);
+      }
+    });
+  }
+
+  // ---------- Face ID lock (WebAuthn platform authenticator, a screen lock only) ----------
+
+  const LOCK_AFTER_MS = 3 * 60 * 1000;
+  const b64 = {
+    enc: (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))),
+    dec: (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0)),
+  };
+  const lockCredential = () => LS.get("fd.lockCred");
+  let hiddenAt = null;
+
+  async function lockSupported() {
+    try {
+      return !!(window.PublicKeyCredential && navigator.credentials &&
+        await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable());
+    } catch (_) { return false; }
+  }
+
+  async function enableLock() {
+    const cred = await navigator.credentials.create({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        rp: { name: "Finance" },
+        user: { id: crypto.getRandomValues(new Uint8Array(16)), name: "Finance lock", displayName: "Finance lock" },
+        pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+        authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required", residentKey: "discouraged" },
+        timeout: 60000,
+        attestation: "none",
+      },
+    });
+    LS.set("fd.lockCred", b64.enc(cred.rawId));
+  }
+
+  async function unlockWithFaceId() {
+    await navigator.credentials.get({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        allowCredentials: [{ type: "public-key", id: b64.dec(lockCredential()) }],
+        userVerification: "required",
+        timeout: 60000,
+      },
+    });
+  }
+
+  function showLock(message) {
+    if (!lockCredential()) return;
+    $lock.innerHTML = `
+      <div class="lock-inner">
+        ${brand()}
+        <div class="stack">
+          <h1>Locked</h1>
+          <p class="muted">Use Face ID to open the app on this phone.</p>
+        </div>
+        ${message ? `<p class="err-text">${esc(message)}</p>` : ""}
+        <button class="btn primary block" id="lock-go">Unlock with Face ID</button>
+        <button class="btn ghost block" id="lock-google">Sign in with Google instead</button>
+      </div>`;
+    $lock.hidden = false;
+    document.getElementById("lock-go").addEventListener("click", async () => {
+      try {
+        await unlockWithFaceId();
+        $lock.hidden = true;
+        $lock.innerHTML = "";
+      } catch (_) {
+        showLock("Face ID did not unlock. Try again, or sign in with Google.");
+      }
+    });
+    // The way back in that never depends on Face ID: a fresh Google sign-in.
+    document.getElementById("lock-google").addEventListener("click", () => {
+      clearToken();
+      $lock.hidden = true;
+      $lock.innerHTML = "";
+      closeSheet();
+      state.signInMessage = "Sign in with Google to open the app.";
+      renderSignIn();
+    });
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") hiddenAt = Date.now();
+    else if (hiddenAt && Date.now() - hiddenAt > LOCK_AFTER_MS) showLock();
+  });
+
+  async function lockSettingsHtml() {
+    if (!(await lockSupported())) return "";
+    const on = !!lockCredential();
+    return `
+      <div class="card stack">
+        <div class="label">Face ID lock · this phone</div>
+        <p class="muted small">When on, this phone asks for Face ID when the app opens or comes back after ${LOCK_AFTER_MS / 60000} minutes away. This is a screen lock only: the real protection is your private Google Sheet and Google sign-in. You can always get back in by signing in with Google.</p>
+        <button class="btn ${on ? "danger" : "primary"} block" id="lock-toggle">${on ? "Turn off Face ID lock" : "Turn on Face ID lock"}</button>
+      </div>`;
+  }
+
+  function bindLockSettings() {
+    const btn = document.getElementById("lock-toggle");
+    if (!btn) return;
+    btn.addEventListener("click", async () => {
+      if (lockCredential()) {
+        LS.del("fd.lockCred");
+        toast("Face ID lock turned off");
+        return route();
+      }
+      try {
+        await enableLock();
+        toast("Face ID lock is on for this phone");
+      } catch (_) {
+        toast("Face ID was not set up", true);
+      }
+      route();
+    });
+  }
+
   function updateOnline() { $offline.hidden = navigator.onLine; }
   window.addEventListener("online", updateOnline);
   window.addEventListener("offline", updateOnline);
@@ -2232,6 +2590,7 @@
     if (!(window.FD_CONFIG && window.FD_CONFIG.GOOGLE_CLIENT_ID)) return renderNotConfigured();
     loadToken();
     if (state.token && state.email) {
+      showLock(); // only when Face ID lock is on for this phone; otherwise a no-op
       afterSignIn();
     } else {
       clearToken();

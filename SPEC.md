@@ -1,6 +1,6 @@
 # Finance Dashboard — Specification
 
-Status: **Stages 1–3 built.** Stage 4 not started.
+Status: **All four stages built.**
 
 ## Purpose
 
@@ -112,7 +112,7 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 5. Long-term view: savings, investments, crypto, long-term savings and the home, each with its total, share and change.
 6. Trends screen: line charts for reachable money and the long-term total, and a stacked view by type. Default period is this year, with options for the last 12 months and all history. Draw incomplete months differently so a gap is never mistaken for a drop. Charts follow the currency toggle, converting each month with its own rate. One small charting library from a public CDN, or SVG.
 
-## Stage 4: Goals, due list, Face ID and privacy
+## Stage 4: Goals, due list, Face ID and privacy — built
 
 1. Goals: several goals, each with a name, target amount, currency and one or more linked accounts. Progress is calculated from the latest balances of the linked accounts. Show a progress bar, the amount remaining and the change since last month. Warn if an account is linked to two goals, but allow it.
 2. "Due now" list: for the signed-in person, the accounts they are the updater for whose update_day has passed this month with no snapshot yet. Mark unfilled earlier months as overdue. Type home is due once a year in its update_month. Show the list at the top of the Overview when not empty, with a count badge on Update. Tapping an item opens the manual form.
@@ -152,6 +152,8 @@ GitHub Pages serves the `main` branch root. The allowed JavaScript origin for th
 - `fd.sheetId` — the spreadsheet id parsed from the pasted link.
 - `fd.token` — the current Google access token, its expiry (about one hour) and the signed-in email.
 - `fd.lastEmail` — used as a sign-in hint next time.
+- `fd.hideAmounts` — "1" when amounts are hidden on this device.
+- `fd.lockCred` — the id of this phone's Face ID (WebAuthn) credential when the lock is on.
 - `fd.acctGroup` — the Accounts grouping (institution, country or owner).
 - `fd.displayCurrency` — the display currency chosen with the toggle (starts from Settings `default_currency`).
 
@@ -212,3 +214,15 @@ When no person is configured yet, the first signed-in user is asked to set up bo
 - **Overview additions:** "Long-term view" cards for savings, investment, crypto, long_term and home with total, share of assets and change vs the previous month; a "Loans" card listing each active loan's remaining balance (for the selected month, else its latest) and monthly payment, and **fixed monthly commitments** = the sum of monthly_payment over active loans, converted at the latest rate.
 - **Trends:** period This year (default) / 12 months / All. Line charts for reachable money and the long-term total; stacked bars by type with loans drawn below zero. Months with missing balances get hollow dots and dashed segments; months with no balances leave a gap. Each month is converted at its own rate, and tapping a month shows its values.
 - **Chart colours:** the type colours are fixed per type (never reassigned) and were validated as a set against the panel colour for colour-blind separation and contrast. Text never uses the series colour; a legend always accompanies the stacked chart.
+
+### Goals, due list, Face ID and privacy (Stage 4)
+
+- **Goals** live under More → Goals, and active goals also appear at the bottom of the Overview. A goal stores `account_ids` as a comma-separated list. Progress = the sum of each linked account's latest balance, converted to the goal's currency at that balance's month rate; a linked loan counts as negative. The screen shows a progress bar, the amount remaining (or "reached") and the change since last month. That change adds up each linked account's move from its previous month to its latest month, counting only accounts that have both. Cards can't be linked. Linking an account that is already in another active goal shows "Also in: …" but is allowed. Goals are deactivated, never deleted.
+- **Due now** (top of the Overview, with a count badge on Update) is personal: it only lists accounts whose `updater` is the signed-in person.
+  - Monthly accounts are due this month once `update_day` has passed (clamped to the month's length) with no snapshot. Every earlier month since the account's first snapshot that is still empty is **overdue**.
+  - A home is due once a year, from `update_month`/`update_day`. A snapshot in that month or later in the year clears it.
+  - The first three items are shown, and the rest sit behind "Show all". Tapping an item opens the One balance form with the account and month filled in, and the as-of date set to today (or the month's last day for a past month).
+- **Face ID lock:** turned on per phone in More, and only offered when the phone has a platform authenticator. It creates a WebAuthn credential (`userVerification: required`, attestation none) and stores only its id. The lock covers the whole screen when the app opens with a valid session, and when it returns after more than 3 minutes in the background. Unlocking asks Face ID via `navigator.credentials.get`. "Sign in with Google instead" always works, and any successful Google sign-in removes the lock. Settings states plainly that this is a screen lock and that the real protection is the private sheet and Google sign-in.
+- **Hide amounts:** an eye button in every page header (and a toggle in More), remembered on the device. Every formatted amount, chart tick and chart readout becomes dots. Percentages stay visible.
+- **Home-screen app:** `manifest.webmanifest` (name "Finance", standalone, dark colours), a generic SVG icon plus 180px and 512px PNGs, and iOS meta tags for full-screen launch. Nothing personal is in the name or icon.
+- **Final pass:** every screen was checked at 375px wide with no sideways scrolling (the currency switch sits under the header on Accounts, Cards and Trends). Empty states were checked on an empty sheet (Overview, Accounts, Cards, Trends, Goals, the Update form). The repository and its full history were searched for personal data and none was found.

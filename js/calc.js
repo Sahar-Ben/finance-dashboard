@@ -242,6 +242,84 @@
     return out;
   }
 
+  // ---------- due list ----------
+
+  // Accounts the person updates whose due date has passed with no snapshot yet.
+  // Monthly accounts: due this month once update_day has passed; earlier months since the account's
+  // first snapshot that are still empty are overdue. Home: due once a year from update_month/update_day.
+  function dueList(accounts, idx, personName, now) {
+    now = now || new Date();
+    const nowM = currentMonth(now);
+    const day = now.getDate();
+    const me = lower(personName);
+    const out = [];
+    const clampDay = (d, month) => Math.min(Math.max(1, Number(d) || 1), Number(lastDayOfMonth(month).slice(8)));
+    accounts.forEach((a) => {
+      if (!isActive(a) || lower(a.updater) !== me) return;
+      const id = norm(a.id);
+      const type = lower(a.type);
+      if (type === "home") {
+        const um = Number(a.update_month);
+        if (!(um >= 1 && um <= 12)) return;
+        const dueMonth = `${nowM.slice(0, 4)}-${pad(um)}`;
+        if (nowM < dueMonth || (nowM === dueMonth && day < clampDay(a.update_day, dueMonth))) return;
+        const done = (idx.byAccount.get(id) || []).some((x) => x.month >= dueMonth);
+        if (!done) out.push({ account: a, month: dueMonth, overdue: nowM > dueMonth });
+        return;
+      }
+      const first = idx.firstMonth.get(id);
+      if (first) {
+        for (let m = first; m < nowM; m = shiftMonth(m, 1)) {
+          if (!idx.get(id, m)) out.push({ account: a, month: m, overdue: true });
+        }
+      }
+      if (day >= clampDay(a.update_day, nowM) && !idx.get(id, nowM)) out.push({ account: a, month: nowM, overdue: false });
+    });
+    return out.sort((x, y) => (x.overdue === y.overdue ? x.month.localeCompare(y.month) : x.overdue ? -1 : 1));
+  }
+
+  // ---------- goals ----------
+
+  const splitIds = (v) => norm(v).split(/[,\s]+/).map((x) => x.trim()).filter(Boolean);
+
+  // Progress of a goal from the latest balances of its linked accounts, in the goal's currency.
+  // The change adds up each account's move from its previous month to its latest month.
+  function goalProgress(goal, accounts, idx, rates) {
+    const cur = norm(goal.currency).toUpperCase() || "ILS";
+    const target = parseAmount(goal.target_amount);
+    const ids = splitIds(goal.account_ids);
+    const byId = new Map(accounts.map((a) => [lower(a.id), a]));
+    let value = 0, changeSum = 0, hasPrev = false, counted = 0;
+    const missing = [];
+    const linked = [];
+    ids.forEach((raw) => {
+      const a = byId.get(lower(raw));
+      if (!a) { missing.push(raw); return; }
+      linked.push(a);
+      const last = latestSnapshot(idx, a.id);
+      if (!last) return;
+      const amt = parseAmount(last.snap.amount);
+      const own = norm(last.snap.currency).toUpperCase() || norm(a.currency).toUpperCase();
+      const v = isFinite(amt) ? convert(amt, own, cur, rates, last.month) : null;
+      if (v == null) return;
+      const sign = lower(a.type) === "loan" ? -1 : 1;
+      value += sign * v;
+      counted++;
+      // Each account's latest balance against its own previous month.
+      const pm = shiftMonth(last.month, -1);
+      const ps = idx.get(norm(a.id), pm);
+      const pa = ps ? parseAmount(ps.amount) : NaN;
+      const pv = isFinite(pa) ? convert(pa, own, cur, rates, pm) : null;
+      if (pv != null) { changeSum += sign * (v - pv); hasPrev = true; }
+    });
+    const pct = isFinite(target) && target > 0 ? Math.max(0, (value / target) * 100) : null;
+    return {
+      cur, target, value, counted, linked, missing,
+      pct, remaining: isFinite(target) ? Math.max(0, target - value) : null,
+      change: hasPrev ? changeSum : null, // only accounts with both months count
+    };
+  }
+
   // ---------- import ----------
 
   // Splits pasted text into raw rows: month | account_id | amount | currency | as_of_date
@@ -345,7 +423,7 @@
     TYPES, ASSET_TYPES, CURRENCIES, MONTH_NAMES, LARGE_CHANGE_RATIO, TRIVIAL_ILS,
     currentMonth, today, isMonth, normMonth, shiftMonth, monthLabel, lastDayOfMonth, normDate, parseAmount,
     validRate, rateTable, rateFor, convert,
-    isActive, indexSnapshots, snapshotMonths, balanceFor, monthTotals, change, latestSnapshot, monthRange,
+    isActive, indexSnapshots, snapshotMonths, balanceFor, monthTotals, change, latestSnapshot, monthRange, dueList, goalProgress, splitIds,
     splitImport, checkImport,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
