@@ -1,0 +1,175 @@
+# Finance Dashboard — Specification
+
+Status: **Stage 1 built.** Stages 2–4 not started.
+
+## Purpose
+
+A private finance dashboard for two people, as a static web app in this repo, hosted on GitHub Pages. Once a month we record the balance of every account we have (several banks, several countries, three currencies) and the monthly total of each credit card. The app shows our position and how it changes. There is no bank API. Data arrives by pasting prepared rows into an import box, or by typing into a form.
+
+## Hard constraints
+
+- Static site only: plain HTML, CSS and JavaScript, one page, no build step, no backend.
+- All data lives in one private Google Sheet that both of us can edit. The browser reads and writes it with the Google Sheets API after Google sign-in (Google Identity Services, token flow, spreadsheets scope).
+- This repo is public. Never put account names, bank names, emails, amounts, the sheet link or id, or any secret in the code, comments, test data, SPEC.md or commit messages. The only configuration in the code is the OAuth client ID, which is public by design. Use obviously fake examples such as "Bank A". Never ask for real accounts or balances; those are entered in the app.
+- The sheet link is pasted by each user on first run and stored only in that device's localStorage.
+- Mobile first: iPhone Safari and a home-screen web app. English only.
+
+## Look: "Neon Prism"
+
+Dark, neon, futuristic. Page background near black with a violet tint. Panels `#12101C` with 1px borders `#262238` and about 24px radius. Text `#F2F0FA`, muted text `#A6A1BD`. One violet neon accent. Positive changes in green `#5BE3A7`, negative in a warm red. Space Grotesk for text, JetBrains Mono for small uppercase labels and for numbers. Very large headline numbers. Cards instead of tables. A fixed bottom tab bar with large tap targets. Respect the iPhone safe areas.
+
+## Data model
+
+Create these tabs with these exact headers if they are missing; never overwrite existing rows.
+
+| Tab | Headers |
+|---|---|
+| Accounts | id, nickname, institution, country, currency, owner, type, updater, update_day, update_month, linked_account, monthly_payment, active, notes |
+| Snapshots | id, month, account_id, amount, currency, as_of_date, entered_by, entered_at, source |
+| Holdings | month, account_id, holding, amount, currency |
+| Goals | id, name, target_amount, currency, account_ids, active |
+| Rates | month, usd_ils, eur_ils |
+| Settings | key, value |
+
+Rules:
+
+- `Accounts.id` is a short unique slug. `owner` is one of the two person names from Settings, or `Joint`.
+- `type` is one of: current, savings, investment, crypto, long_term, loan, home, card.
+- `currency` is ILS, USD or EUR.
+- `updater` is the person responsible for updating that account. `update_day` is the day of month it is due. `update_month` is only for type home, which is due once a year.
+- `linked_account` is only for cards (the account id that pays the card), for display only. `monthly_payment` is only for loans.
+- `month` is always YYYY-MM. For balances it is the month the balance was captured; for cards it is the charge month.
+- `amount` is always positive. There is at most one snapshot per account per month. `source` is import or manual.
+
+## How totals work
+
+- Reachable money = the sum of all current accounts. This is the headline number.
+- Long-term total = current + savings + investment + crypto + long_term + home − loan.
+- Cards are spending only. They never affect either total.
+- The display currency can be ILS (default), USD or EUR, chosen with a toggle remembered on the device. Each amount converts from its own currency using that month's row in Rates; the current month uses the row whose month is latest. Convert between USD and EUR through ILS.
+- Rates come from GOOGLEFINANCE formulas written into the sheet, so no outside service is needed. The latest row stays a live formula. A past month uses the last available rate on or before month end (robust to weekends and holidays), and once it has a valid number it is stored as a plain value so history never shifts. If a rate cannot be obtained, show a notice and let the user type it.
+- Gaps: if an active account has no snapshot for a month, do not carry the old value forward. Mark that month's totals as incomplete and list the missing accounts. The only exception is type home, which carries its last value forward.
+
+## Decision notes (final choices, and what was rejected)
+
+Do not reintroduce the rejected options. If anything else in this spec seems to conflict with these notes, the notes win.
+
+1. Storage: rejected browser-only storage and an encrypted file in a repo. Final: one private Google Sheet with Google sign-in. Never a published or link-shared sheet, never an API key.
+2. Transactions: rejected importing transactions and categories. Final: one balance per account per month, and one total per card per month.
+3. Data entry: banks offer no file export. Rejected reading screenshots inside the app (no OCR, no AI calls from the app). Final: rows prepared outside the app, pasted into an import box with preview and approval, plus a manual form.
+4. Cards: rejected a second "unpaid balance" figure and rejected reducing net worth by card charges. Final: one monthly total per card, spending only. Card figures come only from the card company; card lines shown inside bank apps are ignored to avoid double counting.
+5. Dating: rejected "every balance counts as month-end". Final: each account has its own update_day; a snapshot is filed under the month it was captured in, with the exact as_of_date stored. Cards are filed under the charge month.
+6. Reminders: rejected phone notifications. Final: only a personal "due now" list inside the app.
+7. Missed months: rejected carrying the last value forward. Final: a gap, with the month marked incomplete. The home is the only exception.
+8. Reachable money: rejected including savings or investments. Final: current accounts only. Instant-access savings products are type savings.
+9. Headline: rejected full net worth as the headline. Final: reachable money on top, long-term total beneath.
+10. Investments and crypto: split by holding is postponed. Final: one total per account for now; keep the Holdings tab and keep the code ready for the split. Crypto is its own type and is never split by coin.
+11. Pension, provident and study funds are one type: long_term.
+12. Home: an asset in the long-term total, as a manual estimate updated once a year. Never part of reachable money.
+13. Loans: remaining balance plus monthly payment only. No end dates or schedules.
+14. Exchange-rate effect: rejected separating it from real change. Final: one combined change.
+15. Per-person view: rejected splitting joint accounts 50/50. Final: three groups, the two people and Joint. Everything is visible to both users; no private accounts.
+16. Joint accounts are always updated by one person, set in the updater field.
+17. Corrections: edited directly in the app. No change history.
+18. Goals: several goals with target amounts, progress taken from linked accounts. No target dates, no manual progress.
+19. Backup: Google's version history. No export, no automatic copies.
+20. Small balances: track everything, no minimum threshold.
+21. History: card totals go back to January of this year; balances start from the first month entered. Screens must cope with months that have card data but no balances.
+22. Security: Face ID is a screen lock on top of Google sign-in, not a replacement. A hide-amounts button exists; amounts are visible by default.
+23. Language and currency: English only. Opens in ILS, toggle to USD and EUR.
+24. Charts open on this year.
+
+## Stage 1: Foundation — built
+
+1. Save this specification as SPEC.md and keep it up to date in every stage.
+2. Walk through the Google Cloud setup one step at a time: create a project, enable the Sheets API, configure the consent screen in testing mode with two test users, and create a web client ID with the GitHub Pages origin as the allowed JavaScript origin. Then ask for the client ID.
+3. Sign-in screen. After sign-in, on first run ask for the sheet link, check that the signed-in account can edit it, and create any missing tabs.
+4. Settings screen: the two people's display names and Google emails, and the default display currency. The signed-in email decides which person "I" am. If the email matches neither person, show a clear message and no data.
+5. Accounts screen: list accounts grouped by institution; add, edit and deactivate an account with a form that shows only the fields that apply to the chosen type.
+6. Bulk add on the Accounts screen: a text box that accepts one account per line in the form
+   `id | nickname | institution | country | currency | owner | type | updater | update_day | linked_account`
+   Show a preview with problems highlighted (duplicate id, unknown type, unknown owner) and write only after approval.
+7. Bottom tab bar with Overview, Accounts, Cards, Trends and More. Overview, Cards and Trends are placeholders for now. Settings lives under More.
+8. Handle ordinary failures gracefully: expired sign-in (ask again without losing what was typed), no connection, no permission on the sheet.
+9. Explain how to turn on GitHub Pages for this repo, and merge to main so the live site updates.
+
+## Stage 2: Getting data in, and the Overview
+
+1. Import box under a clear "Update" entry point. Rows are pasted one per line in the form
+   `month | account_id | amount | currency | as_of_date`
+   Show a preview before anything is saved: account nickname, new amount, previous month's amount, and the change. Flag unknown account ids, a currency different from the account's, malformed lines, and bad months. Highlight unusually large changes (more than 25 percent and more than a trivial amount). If a snapshot already exists for that account and month, say the row will replace it. Allow editing or removing rows in the preview. Write only after approval, with entered_by, entered_at and source = import.
+2. Manual form in the same place: account (mine and joint first, with a way to see all), month (default the current month), amount, as-of date. Saved with source = manual.
+3. A "Copy account list" button that copies every active account as lines of: `id | nickname | currency | owner`.
+4. Exchange rates as described above.
+5. Overview screen: reachable money in very large type; the long-term total beneath it; the currency toggle; "what changed" for both numbers against the previous month and against the first month of this year that has data, as an amount and a percentage; a breakdown by type as cards with totals and shares; a month selector defaulting to the latest month with snapshots; and the incomplete-month marking.
+
+## Stage 3: Accounts, cards, loans and trends
+
+1. Accounts screen upgraded: each account shows its latest balance, the change from the previous month, and when it was last updated. Group by institution, by country, or by owner. Grouping by owner shows exactly three groups, the two people and Joint, each with a subtotal. Show the original currency small beside converted amounts.
+2. Account detail: month-by-month history with a small chart; edit or delete any snapshot.
+3. Cards screen: for each card, the monthly total for the selected month, a bar chart of this year's monthly totals, and the average; a combined total for all cards per month; a split by owner; and which bank account pays each card.
+4. Loans: show remaining balance and monthly payment, plus a "fixed monthly commitments" figure summing monthly_payment across active loans.
+5. Long-term view: savings, investments, crypto, long-term savings and the home, each with its total, share and change.
+6. Trends screen: line charts for reachable money and the long-term total, and a stacked view by type. Default period is this year, with options for the last 12 months and all history. Draw incomplete months differently so a gap is never mistaken for a drop. Charts follow the currency toggle, converting each month with its own rate. One small charting library from a public CDN, or SVG.
+
+## Stage 4: Goals, due list, Face ID and privacy
+
+1. Goals: several goals, each with a name, target amount, currency and one or more linked accounts. Progress is calculated from the latest balances of the linked accounts. Show a progress bar, the amount remaining and the change since last month. Warn if an account is linked to two goals, but allow it.
+2. "Due now" list: for the signed-in person, the accounts they are the updater for whose update_day has passed this month with no snapshot yet. Mark unfilled earlier months as overdue. Type home is due once a year in its update_month. Show the list at the top of the Overview when not empty, with a count badge on Update. Tapping an item opens the manual form.
+3. Face ID lock: use the WebAuthn platform authenticator so each phone can require Face ID when the app opens or returns from the background after a few minutes. Enabled once per device in Settings. Say honestly in Settings that this is a screen lock, and that the real protection is the private sheet and Google sign-in. Hide the option on unsupported devices. Always leave a way back in through Google sign-in.
+4. Hide amounts: an eye button in the header that replaces every amount with dots, including chart labels and tooltips, remembered on the device.
+5. Home-screen app: a web app manifest, a generic Neon Prism icon and the right meta tags, so it opens full screen from the iPhone home screen. The icon and name reveal nothing personal.
+6. Final pass: check every screen at iPhone width, add helpful empty states for an empty sheet, and search the repo for any personal data and remove it.
+
+## How to work
+
+Build one stage at a time. After each stage: update SPEC.md, commit, merge to main, and give a plain-language test checklist. Wait for the go-ahead before the next stage.
+
+---
+
+## Implementation notes (kept up to date)
+
+### Files
+
+| File | Role |
+|---|---|
+| `index.html` | The single page. Loads fonts, Google Identity Services and the scripts below. |
+| `css/app.css` | Neon Prism styles. Colour tokens live on `:root`. |
+| `js/config.js` | The only configuration: `GOOGLE_CLIENT_ID` (public by design). |
+| `js/sheets.js` | Thin Google Sheets API layer: read a tab as objects, append, update rows by id, create missing tabs and headers, check edit access. |
+| `js/app.js` | Sign-in, routing between tabs, screens and forms. |
+| `manifest.webmanifest`, `icons/` | Home-screen web app metadata and a generic icon (finished in Stage 4). |
+| `.nojekyll` | Tells GitHub Pages to serve the files as they are. |
+
+### Hosting
+
+GitHub Pages serves the `main` branch root. The allowed JavaScript origin for the OAuth client is the Pages origin (`https://<github-user>.github.io`, lowercase, no path).
+
+### Device storage (localStorage, never in the repo)
+
+- `fd.sheetId` — the spreadsheet id parsed from the pasted link.
+- `fd.token` — the current Google access token, its expiry (about one hour) and the signed-in email.
+- `fd.lastEmail` — used as a sign-in hint next time.
+
+### Settings tab keys
+
+| key | meaning |
+|---|---|
+| `person1_name`, `person1_email` | First person's display name and Google email |
+| `person2_name`, `person2_email` | Second person's display name and Google email |
+| `default_currency` | ILS, USD or EUR |
+
+When no person is configured yet, the first signed-in user is asked to set up both people (their own email must be one of the two). After that, an email that matches neither person sees a "not recognised" message and no data. Owner and updater store the person's display name; renaming a person in Settings updates those fields in Accounts.
+
+### Sheet handling
+
+- Each tab is read by header name, so column order in the sheet does not matter and extra columns are preserved.
+- If a tab is missing it is created with its header row. If a tab exists but lacks some expected headers, they are added at the end of row 1. Existing rows are never overwritten.
+- Edit permission is checked once, when the sheet is first connected, by rewriting the spreadsheet's own title with the same value (a no-op that fails for view-only users).
+- Account ids cannot be changed after creation, because snapshots refer to them. Accounts are deactivated (`active` = FALSE), never deleted.
+
+### Failure handling
+
+- Expired sign-in during an action: a "Sign in again" panel appears over the current screen; after signing in, the action is retried. Open forms keep their contents. Signing in as a different account reloads the app.
+- No connection: an offline banner appears; actions fail with a plain message and forms keep their contents.
+- No permission: the connect screen explains whether the sheet was not found, not shared, or view-only.
