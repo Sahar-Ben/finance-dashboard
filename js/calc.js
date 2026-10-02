@@ -177,10 +177,11 @@
     return null;
   }
 
-  // Totals for one month in the display currency, converted with that month's rate.
+  // Totals for one month in the display currency, converted with that month's rate, or with the
+  // rate of `rateMonth` when given (used for comparisons, so currency moves don't count as change).
   // An active non-card account is expected from its first snapshot onward (or, if it has none yet,
   // from the latest month with balances); a missing expected balance marks the month incomplete.
-  function monthTotals(accounts, idx, month, display, rates, latestBalanceMonth) {
+  function monthTotals(accounts, idx, month, display, rates, latestBalanceMonth, rateMonth) {
     const byType = {};
     TYPES.forEach((t) => { byType[t] = 0; });
     const counts = {};
@@ -204,7 +205,7 @@
       const amt = parseAmount(b.snap.amount);
       if (!isFinite(amt)) return;
       const cur = norm(b.snap.currency).toUpperCase() || norm(a.currency).toUpperCase();
-      const v = convert(Math.abs(amt), cur, display, rates, month);
+      const v = convert(Math.abs(amt), cur, display, rates, rateMonth || month);
       if (v == null) { unconverted.push(a); return; }
       if (type === "card") { cards += v; cardCount++; return; }
       if (!b.carried) balances++;
@@ -309,7 +310,7 @@
       const pm = shiftMonth(last.month, -1);
       const ps = idx.get(norm(a.id), pm);
       const pa = ps ? parseAmount(ps.amount) : NaN;
-      const pv = isFinite(pa) ? convert(pa, own, cur, rates, pm) : null;
+      const pv = isFinite(pa) ? convert(pa, own, cur, rates, last.month) : null; // same rate: no currency effect
       if (pv != null) { changeSum += sign * (v - pv); hasPrev = true; }
     });
     const pct = isFinite(target) && target > 0 ? Math.max(0, (value / target) * 100) : null;

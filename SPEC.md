@@ -48,6 +48,7 @@ Rules:
 - Cards are spending only. They never affect either total.
 - The display currency can be ILS (default), USD or EUR, chosen with a toggle remembered on the device. Each amount converts from its own currency using that month's row in Rates; the current month uses the row whose month is latest. Convert between USD and EUR through ILS.
 - Rates come from GOOGLEFINANCE formulas written into the sheet, so no outside service is needed. The latest row stays a live formula. A past month uses the last available rate on or before month end (robust to weekends and holidays), and once it has a valid number it is stored as a plain value so history never shifts. If a rate cannot be obtained, show a notice and let the user type it.
+- Changes ("vs previous month", "since the first month of the year", per-type and goal changes) convert both months at the rate of the later month, so a pure exchange-rate move shows as no change. Totals themselves, and the Trends charts, still convert each month at its own rate.
 - Gaps: if an active account has no snapshot for a month, do not carry the old value forward. Mark that month's totals as incomplete and list the missing accounts. The only exception is type home, which carries its last value forward.
 
 ## Decision notes (final choices, and what was rejected)
@@ -67,7 +68,7 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 11. Pension, provident and study funds are one type: long_term.
 12. Home: an asset in the long-term total, as a manual estimate updated once a year. Never part of reachable money.
 13. Loans: remaining balance plus monthly payment only. No end dates or schedules.
-14. Exchange-rate effect: rejected separating it from real change. Final: one combined change.
+14. Exchange-rate effect: *(revised after Stage 4, see "Changes agreed after the plan" 2)* changes exclude currency movement. Comparisons convert both months at the same rate, so only real changes in value show; the exchange-rate effect is not shown separately.
 15. Per-person view: rejected splitting joint accounts 50/50. Final: three groups, the two people and Joint. Everything is visible to both users; no private accounts.
 16. Joint accounts are always updated by one person, set in the updater field.
 17. Corrections: edited directly in the app. No change history.
@@ -124,6 +125,8 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 ## Changes agreed after the plan
 
 1. **Banks tab** (requested after Stage 4): the tab bar is now Overview, Accounts, **Banks**, Cards, Trends, More. Banks shows, per institution, the net total of the latest balances (loans subtracted, cards excluded), the change (each account's latest month against its own previous month, added up), every account with its **update status for the current month**, and a line chart of the bank's monthly net for this year. Status colours: green = updated this month (with the as-of date), orange = due (update_day has passed, no snapshot yet), grey = not due yet. A home is yearly (due from update_month/update_day). The top card shows the overall net, "N of M updated" for the month (homes not yet due are left out of the count), and an Update button when something is due. Tapping an account opens its detail.
+
+2. **Changes exclude currency moves** (requested after Stage 4, replacing decision note 14). The Overview's "vs" and "since" lines and the Long-term view changes compute the earlier month's totals at the selected month's rate. A goal's change converts each account's previous balance at the rate of its latest month. Account, bank and import-preview changes were already in each account's own currency. Example: a home entered as €120,000 in January shows no change in October, even though the euro rose.
 
 ## How to work
 

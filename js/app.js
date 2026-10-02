@@ -1058,7 +1058,7 @@
     if (!state.ovMonth || !months.all.includes(state.ovMonth)) state.ovMonth = latestBal || months.all[0] || null;
     const month = state.ovMonth;
     const idx = Calc.indexSnapshots(state.snapshots);
-    const totalsFor = (m) => Calc.monthTotals(state.accounts, idx, m, cur, state.rates, latestBal);
+    const totalsFor = (m, rateMonth) => Calc.monthTotals(state.accounts, idx, m, cur, state.rates, latestBal, rateMonth);
 
     const due = dueItems();
     const head = `
@@ -1099,9 +1099,9 @@
 
     // Comparisons: the calendar month before, and the first month of the same year with balances.
     const prevM = Calc.shiftMonth(month, -1);
-    const prevT = totalsFor(prevM);
+    const prevT = totalsFor(prevM, month); // converted at this month's rate: changes exclude currency moves
     const yearFirst = months.balances.filter((m) => m.slice(0, 4) === month.slice(0, 4) && m < month).sort()[0] || null;
-    const firstT = yearFirst ? totalsFor(yearFirst) : null;
+    const firstT = yearFirst ? totalsFor(yearFirst, month) : null;
 
     const changeLine = (label, field, other, otherMonth) => {
       if (!other || !other.hasBalances) {
