@@ -130,9 +130,13 @@
 
   // Reads a whole tab. Returns { header, rows } where each row is an object
   // keyed by header name plus a hidden _row (1-based sheet row number).
-  async function readTab(tab) {
+  // Pass { formulas: true } to get formulas instead of their results.
+  async function readTab(tab, opts) {
     const res = await call(`/values/${encodeURIComponent(q(tab))}`, {
-      query: { valueRenderOption: "UNFORMATTED_VALUE", dateTimeRenderOption: "FORMATTED_STRING" },
+      query: {
+        valueRenderOption: opts && opts.formulas ? "FORMULA" : "UNFORMATTED_VALUE",
+        dateTimeRenderOption: "FORMATTED_STRING",
+      },
     });
     const values = res.values || [];
     const header = (values[0] || []).map((h) => String(h).trim());
@@ -156,12 +160,13 @@
     });
   }
 
-  async function appendRows(tab, objects) {
+  // inputOption "USER_ENTERED" makes the sheet evaluate formulas; the default "RAW" stores values as given.
+  async function appendRows(tab, objects, inputOption) {
     if (!objects.length) return;
     const { header } = await readTab(tab);
     await call(`/values/${encodeURIComponent(`${q(tab)}!A1`)}:append`, {
       method: "POST",
-      query: { valueInputOption: "RAW", insertDataOption: "INSERT_ROWS" },
+      query: { valueInputOption: inputOption || "RAW", insertDataOption: "INSERT_ROWS" },
       body: { values: objects.map((o) => toRow(header, o)) },
     });
   }
@@ -180,6 +185,17 @@
       };
     });
     await call("/values:batchUpdate", { method: "POST", body: { valueInputOption: "RAW", data } });
+  }
+
+  // Writes single cells. cells: [{ row (1-based), field (header name), value }].
+  async function setCells(tab, header, cells, inputOption) {
+    if (!cells.length) return;
+    const data = cells.map(({ row, field, value }) => {
+      const col = header.indexOf(field) + 1;
+      if (!col) throw new SheetsError(`No column ${field} in ${tab}`, 400);
+      return { range: `${q(tab)}!${colLetter(col)}${row}`, values: [[value]] };
+    });
+    await call("/values:batchUpdate", { method: "POST", body: { valueInputOption: inputOption || "RAW", data } });
   }
 
   const updateRow = (tab, keyField, key, changes) => updateRows(tab, keyField, [{ key, changes }]);
@@ -213,6 +229,6 @@
 
   window.Sheets = {
     SCHEMA, SheetsError, configure, parseSheetId, getMeta, checkCanEdit, ensureSchema,
-    readTab, appendRows, updateRow, updateRows, readSettings, writeSettings,
+    readTab, appendRows, updateRow, updateRows, setCells, readSettings, writeSettings,
   };
 })();

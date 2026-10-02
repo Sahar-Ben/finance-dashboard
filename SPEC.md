@@ -1,6 +1,6 @@
 # Finance Dashboard — Specification
 
-Status: **Stage 1 built.** Stages 2–4 not started.
+Status: **Stages 1 and 2 built.** Stages 3–4 not started.
 
 ## Purpose
 
@@ -93,7 +93,7 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 8. Handle ordinary failures gracefully: expired sign-in (ask again without losing what was typed), no connection, no permission on the sheet.
 9. Explain how to turn on GitHub Pages for this repo, and merge to main so the live site updates.
 
-## Stage 2: Getting data in, and the Overview
+## Stage 2: Getting data in, and the Overview — built
 
 1. Import box under a clear "Update" entry point. Rows are pasted one per line in the form
    `month | account_id | amount | currency | as_of_date`
@@ -136,6 +136,7 @@ Build one stage at a time. After each stage: update SPEC.md, commit, merge to ma
 | `index.html` | The single page. Loads fonts, Google Identity Services and the scripts below. |
 | `css/app.css` | Neon Prism styles. Colour tokens live on `:root`. |
 | `js/config.js` | The only configuration: `GOOGLE_CLIENT_ID` (public by design). |
+| `js/calc.js` | Pure calculations with no screen code: months and dates, amounts, exchange-rate lookup and conversion, monthly totals, gaps, import checks. |
 | `js/sheets.js` | Thin Google Sheets API layer: read a tab as objects, append, update rows by id, create missing tabs and headers, check edit access. |
 | `js/app.js` | Sign-in, routing between tabs, screens and forms. |
 | `manifest.webmanifest`, `icons/` | Home-screen web app metadata and a generic icon (finished in Stage 4). |
@@ -150,6 +151,7 @@ GitHub Pages serves the `main` branch root. The allowed JavaScript origin for th
 - `fd.sheetId` — the spreadsheet id parsed from the pasted link.
 - `fd.token` — the current Google access token, its expiry (about one hour) and the signed-in email.
 - `fd.lastEmail` — used as a sign-in hint next time.
+- `fd.displayCurrency` — the display currency chosen with the toggle (starts from Settings `default_currency`).
 
 ### Settings tab keys
 
@@ -173,3 +175,28 @@ When no person is configured yet, the first signed-in user is asked to set up bo
 - Expired sign-in during an action: a "Sign in again" panel appears over the current screen; after signing in, the action is retried. Open forms keep their contents. Signing in as a different account reloads the app.
 - No connection: an offline banner appears; actions fail with a plain message and forms keep their contents.
 - No permission: the connect screen explains whether the sheet was not found, not shared, or view-only.
+
+### Update screen (Stage 2)
+
+- Reached from the **Update** button at the top of the Overview (Stage 4 adds the "due" count badge to it). It has two modes: **Paste rows** and **One balance**.
+- Import preview checks: unknown account id; currency different from the account's; malformed line (not 3–5 columns); bad month (not YYYY-MM, or in the future; cards may use next month as their charge month); amount not a number or negative; bad or future as-of date; the same account and month twice in one paste. These rows are skipped. Shown but not blocking: "Replaces" an existing snapshot, "Large change", an as-of date outside the month, an inactive account, and a missing as-of date (then the month's last day is used, or today for the current month).
+- Large change = more than 25% **and** more than 1,000 ILS (converted) away from the previous calendar month.
+- Rows can be edited (opens a small form) or removed in the preview. Approving re-reads the sheet first, so a balance a partner saved meanwhile is replaced rather than duplicated.
+- Saving: a snapshot for the same account and month is updated in place (keeping its id); otherwise a row is appended with a new random id. `entered_by` is the signed-in person's name, `entered_at` an ISO timestamp, `source` is import or manual.
+- One balance: accounts owned by me, updated by me, or Joint come first; "Show all accounts" adds the rest. It shows the previous month's value, whether a value is being replaced, and the change; a large change asks for a second tap.
+- **Copy account list** copies every active account as `id | nickname | currency | owner`, for preparing import rows outside the app.
+
+### Exchange rates (Stage 2)
+
+- The Rates tab gets a row for every month that has snapshots, plus the current month. It is checked each time the app opens and after each save.
+- Current month: `=GOOGLEFINANCE("CURRENCY:USDILS")` (and EURILS), kept live.
+- Past months: a formula that takes the last daily rate on or before the month's last day (looks back 10 days, so weekends and holidays are covered). Once it shows a valid number, the app replaces the formula with that plain number. A month whose live formula is left over from when it was current is switched to the month-end formula.
+- A typed number is never overwritten. If a rate shows an error, the Overview shows a "rate missing" notice where it can be typed in.
+- If the sheet's locale needs `;` between formula arguments, the app switches automatically after the first parse error.
+- Converting: each amount goes through ILS using its month's rate. Months from the latest Rates row onward use the latest row. A past month without a valid rate uses the nearest earlier valid month, or failing that the nearest later one. Accounts that still can't be converted are left out, and the month is marked incomplete.
+
+### Totals and gaps (Stage 2)
+
+- Totals use every account with a snapshot that month, including inactive ones (they existed then). Cards never count; their monthly total is shown separately as spending.
+- An active non-card account is **expected** from the month of its first snapshot onward. An account with no snapshots yet is expected from the latest month with balances. A missing expected balance marks the month incomplete and lists the account. An active home carries its last earlier value forward instead.
+- Overview: the month selector lists every month with any snapshot (card-only months are labelled). It defaults to the latest month with balances. Comparisons are against the previous calendar month and against the first month of the same year with balances, as amount and percentage, flagged when the other month is incomplete. Type cards show each type's total and share of assets (current, savings, investment, crypto, long_term, home); loans are shown as owed and subtracted.

@@ -32,6 +32,17 @@
     settings: {},
     me: null,          // { key, name, email } or null
     accounts: [],
+    snapshots: [],
+    snapHeader: [],
+    rateRows: [],
+    rateHeader: [],
+    rates: [],          // Calc.rateTable(rateRows)
+    rateIssues: [],     // [{ month, field, row }] rates that could not be fetched
+    ratesPending: false,
+    displayCur: LS.get("fd.displayCurrency"),
+    ovMonth: null,      // month shown on the Overview
+    imp: { text: "", rows: null },  // import box contents, kept while moving around the app
+    manualShowAll: false,
     signInMessage: "",
   };
 
@@ -268,6 +279,9 @@
     state.me = null;
     state.settings = {};
     state.accounts = [];
+    state.snapshots = [];
+    state.imp = { text: "", rows: null };
+    state.manualDraft = null;
     state.signInMessage = "You are signed out.";
     closeSheet();
     renderSignIn();
@@ -336,10 +350,32 @@
   }
 
   async function loadData() {
-    const [settings, accounts] = await Promise.all([Sheets.readSettings(), Sheets.readTab("Accounts")]);
+    const [settings, accounts, snaps, rates] = await Promise.all([
+      Sheets.readSettings(), Sheets.readTab("Accounts"), Sheets.readTab("Snapshots"), Sheets.readTab("Rates"),
+    ]);
     state.settings = settings;
     state.accounts = accounts.rows;
+    setSnapshots(snaps);
+    setRates(rates);
     state.me = people().find((p) => p.email && p.email === state.email) || null;
+    if (!CURRENCIES.includes(state.displayCur)) {
+      const d = norm(settings.default_currency).toUpperCase();
+      state.displayCur = CURRENCIES.includes(d) ? d : "ILS";
+    }
+    if (state.me) syncRatesInBackground();
+  }
+
+  function setSnapshots(res) {
+    state.snapshots = res.rows;
+    state.snapHeader = res.header;
+  }
+  function setRates(res) {
+    state.rateRows = res.rows;
+    state.rateHeader = res.header;
+    state.rates = Calc.rateTable(res.rows);
+  }
+  async function reloadSnapshots() {
+    setSnapshots(await Sheets.readTab("Snapshots"));
   }
 
   async function reloadAccounts() {
@@ -443,6 +479,10 @@
     state.sheetTitle = "";
     state.settings = {};
     state.accounts = [];
+    state.snapshots = [];
+    state.rateRows = [];
+    state.rates = [];
+    state.imp = { text: "", rows: null };
     state.me = null;
     closeSheet();
     renderConnect();
@@ -465,10 +505,15 @@
     { id: "more", label: "More", render: renderMore },
   ];
 
-  function currentTab() {
+  // Screens reached from a button rather than the tab bar; `tab` is the tab shown as current.
+  const SUBSCREENS = { update: { tab: "overview", render: () => renderUpdate() } };
+
+  function currentRoute() {
     const h = location.hash.replace("#", "");
+    if (SUBSCREENS[h]) return h;
     return TABS.some((t) => t.id === h) ? h : "overview";
   }
+  const currentTab = () => { const r = currentRoute(); return SUBSCREENS[r] ? SUBSCREENS[r].tab : r; };
 
   function route() {
     if (!state.token) return renderSignIn();
@@ -477,18 +522,20 @@
     if (!peopleConfigured()) return renderSetupPeople();
     if (!state.me) return renderNotRecognised();
     const tab = currentTab();
+    const r = currentRoute();
     $tabbar.hidden = false;
     $screen.classList.remove("no-tabs");
     $tabbar.innerHTML = `<div class="tabs">${TABS.map((t) => `
       <button data-tab="${t.id}" ${t.id === tab ? 'aria-current="page"' : ""}>${ICONS[t.id]}<span>${t.label}</span></button>`).join("")}</div>`;
-    TABS.find((t) => t.id === tab).render();
+    if (SUBSCREENS[r]) SUBSCREENS[r].render();
+    else TABS.find((t) => t.id === tab).render();
     window.scrollTo(0, 0);
   }
 
   $tabbar.addEventListener("click", (e) => {
     const b = e.target.closest("[data-tab]");
     if (!b) return;
-    if (currentTab() === b.dataset.tab) return;
+    if (currentRoute() === b.dataset.tab) return;
     location.hash = b.dataset.tab;
   });
   window.addEventListener("hashchange", () => { if (state.me) route(); });
@@ -507,26 +554,672 @@
     renderPlaceholder("History", "Trends", "Charts of reachable money and the long-term total arrive in a later stage.");
   }
 
-  function renderOverview() {
-    const active = state.accounts.filter(isActive);
-    const counts = {};
-    active.forEach((a) => { const t = lower(a.type); counts[t] = (counts[t] || 0) + 1; });
-    $screen.innerHTML = `
-      <div class="page-head"><div><div class="label">Overview</div><h1>Hi, ${esc(state.me.name)}</h1></div></div>
-      <div class="stack-lg">
-        <div class="card hero stack">
-          <div class="label">Reachable money</div>
-          <div class="big-number">—</div>
-          <p class="muted">Balances are added in the next stage. For now, set up your accounts.</p>
-        </div>
-        <div class="card stack">
-          <div class="spread"><div class="label">Accounts</div><span class="mono">${active.length} active</span></div>
-          ${active.length ? `<div class="row wrap">${TYPES.filter((t) => counts[t]).map((t) =>
-            `<span class="chip">${TYPE_LABEL[t]} · ${counts[t]}</span>`).join("")}</div>`
-            : `<p class="muted">No accounts yet.</p>`}
-          <a class="btn block" href="#accounts">Go to Accounts</a>
-        </div>
+  // ---------- money formatting ----------
+
+  function fmtMoney(v, cur, decimals) {
+    if (v == null || !isFinite(v)) return "—";
+    try {
+      return new Intl.NumberFormat("en-US", {
+        style: "currency", currency: cur, minimumFractionDigits: 0, maximumFractionDigits: decimals ? 2 : 0,
+      }).format(v);
+    } catch (_) {
+      return `${cur} ${Math.round(v).toLocaleString("en-US")}`;
+    }
+  }
+  function fmtSigned(v, cur) {
+    if (v == null) return "—";
+    const sign = v > 0.5 ? "+" : v < -0.5 ? "−" : "±";
+    return sign + fmtMoney(Math.abs(v), cur);
+  }
+  function fmtPct(p) {
+    if (p == null || !isFinite(p)) return "";
+    return `${p > 0 ? "+" : p < 0 ? "−" : ""}${Math.abs(p).toFixed(1)}%`;
+  }
+  const toneOf = (v) => (v == null || Math.abs(v) < 0.5 ? "muted" : v > 0 ? "pos" : "neg");
+  const accountName = (a) => esc(norm(a.nickname) || a.id);
+
+  // ---------- exchange rates (GOOGLEFINANCE in the Rates tab) ----------
+
+  const RATE_PAIRS = { usd_ils: "USDILS", eur_ils: "EURILS" };
+  let formulaSep = ",";
+
+  const liveFormula = (pair) => `=GOOGLEFINANCE("CURRENCY:${pair}")`;
+  // Last available daily rate on or before the month's last day (skips weekends and holidays).
+  function monthEndFormula(pair, month) {
+    const [y, m] = month.split("-").map(Number);
+    const f = `=LET(monthend,EOMONTH(DATE(${y},${m},1),0),` +
+      `tbl,GOOGLEFINANCE("CURRENCY:${pair}","price",monthend-10,monthend+1),` +
+      `dts,INDEX(tbl,0,1),vals,FILTER(INDEX(tbl,0,2),ISNUMBER(dts),dts<monthend+1),` +
+      `INDEX(vals,ROWS(vals),1))`;
+    return formulaSep === "," ? f : f.replace(/,/g, ";");
+  }
+  const isFormula = (v) => typeof v === "string" && v.startsWith("=");
+  const isPending = (v) => typeof v === "string" && /^loading/i.test(v);
+
+  let ratesSyncing = null;
+  function syncRatesInBackground() {
+    if (ratesSyncing) return ratesSyncing;
+    ratesSyncing = syncRates()
+      .catch((e) => { console.warn("Rates sync failed:", e); })
+      .finally(() => { ratesSyncing = null; refreshOverview(); });
+    return ratesSyncing;
+  }
+
+  // Re-draws the Overview after rates arrive, unless a panel is open over it.
+  function refreshOverview() {
+    if (!state.me || !$sheet.hidden || !$reauth.hidden || $tabbar.hidden) return;
+    if (currentRoute() === "overview") renderOverview();
+  }
+
+  // Makes sure every month with snapshots (and the current month) has a Rates row:
+  // the current month keeps a live formula; past months get a month-end formula, and once that
+  // shows a valid number it is replaced by the plain value so history never shifts.
+  async function syncRates() {
+    const nowM = Calc.currentMonth();
+    const needed = new Set([nowM]);
+    state.snapshots.forEach((s) => { const m = Calc.normMonth(s.month); if (m && m <= nowM) needed.add(m); });
+
+    const plan = async () => {
+      const [vals, forms] = await Promise.all([Sheets.readTab("Rates"), Sheets.readTab("Rates", { formulas: true })]);
+      setRates(vals);
+      const formulaOf = new Map(forms.rows.map((r) => [r._row, r]));
+      const seen = new Map();
+      vals.rows.forEach((r) => { const m = Calc.normMonth(r.month); if (m && !seen.has(m)) seen.set(m, r); });
+      const toFormula = [], toValue = [], issues = [];
+      let pending = false, parseErrors = false;
+      seen.forEach((r, m) => {
+        const f = formulaOf.get(r._row) || {};
+        Object.keys(RATE_PAIRS).forEach((field) => {
+          const value = r[field];
+          const formula = isFormula(f[field]) ? f[field] : null;
+          const empty = value === "" || value == null;
+          if (m >= nowM) {
+            if (empty) toFormula.push({ row: r._row, field, value: liveFormula(RATE_PAIRS[field]) });
+            else if (isPending(value)) pending = true;
+            else if (!Calc.validRate(value)) issues.push({ month: m, field, row: r._row });
+            return;
+          }
+          if (!formula) {
+            if (empty) toFormula.push({ row: r._row, field, value: monthEndFormula(RATE_PAIRS[field], m) });
+            else if (!Calc.validRate(value)) issues.push({ month: m, field, row: r._row });
+            return; // a typed number is kept as it is
+          }
+          if (!/EOMONTH/i.test(formula)) { // the live formula of a month that has since ended
+            toFormula.push({ row: r._row, field, value: monthEndFormula(RATE_PAIRS[field], m) });
+          } else if (Calc.validRate(value)) {
+            toValue.push({ row: r._row, field, value });
+          } else if (isPending(value)) {
+            pending = true;
+          } else {
+            if (/^#ERROR/i.test(String(value))) parseErrors = true;
+            issues.push({ month: m, field, row: r._row });
+          }
+        });
+      });
+      const missing = [...needed].filter((m) => !seen.has(m)).sort();
+      return { header: vals.header, toFormula, toValue, issues, pending, parseErrors, missing };
+    };
+
+    let p = await plan();
+    // Some spreadsheet locales separate formula arguments with ";" — switch once if formulas fail to parse.
+    if (p.parseErrors && formulaSep === ",") {
+      formulaSep = ";";
+      p.issues.forEach((i) => p.toFormula.push({ row: i.row, field: i.field, value: monthEndFormula(RATE_PAIRS[i.field], i.month) }));
+      p.issues = [];
+    }
+    let wroteFormulas = false;
+    if (p.toValue.length) await Sheets.setCells("Rates", p.header, p.toValue, "RAW");
+    if (p.toFormula.length) { await Sheets.setCells("Rates", p.header, p.toFormula, "USER_ENTERED"); wroteFormulas = true; }
+    if (p.missing.length) {
+      await Sheets.appendRows("Rates", p.missing.map((m) => {
+        const row = { month: `'${m}` };
+        Object.keys(RATE_PAIRS).forEach((field) => {
+          row[field] = m >= Calc.currentMonth() ? liveFormula(RATE_PAIRS[field]) : monthEndFormula(RATE_PAIRS[field], m);
+        });
+        return row;
+      }), "USER_ENTERED");
+      wroteFormulas = true;
+    }
+    if (wroteFormulas) {
+      await new Promise((r) => setTimeout(r, 3000)); // give GOOGLEFINANCE a moment
+      p = await plan();
+      if (p.toValue.length) await Sheets.setCells("Rates", p.header, p.toValue, "RAW");
+    }
+    state.rateIssues = p.issues;
+    state.ratesPending = p.pending;
+  }
+
+  async function saveTypedRate(issue, value) {
+    await guarded(async () => {
+      await Sheets.setCells("Rates", state.rateHeader, [{ row: issue.row, field: issue.field, value }], "RAW");
+      setRates(await Sheets.readTab("Rates"));
+    });
+    state.rateIssues = state.rateIssues.filter((i) => !(i.row === issue.row && i.field === issue.field));
+  }
+
+  function rateNoticesHtml(months) {
+    const relevant = state.rateIssues.filter((i) => !months || months.includes(i.month));
+    if (!relevant.length) return "";
+    return `
+      <div class="card notice stack">
+        <div class="label">Exchange rate missing</div>
+        <p class="muted">Google Finance could not supply ${relevant.length === 1 ? "this rate" : "these rates"}. Type the rate (how many ₪ for 1 unit) and tap Save.</p>
+        ${relevant.map((i, n) => `
+          <div class="rate-row">
+            <span class="mono">${esc(Calc.monthLabel(i.month, true))} · ${i.field === "usd_ils" ? "USD → ILS" : "EUR → ILS"}</span>
+            <input type="text" inputmode="decimal" data-rate-input="${n}" placeholder="${i.field === "usd_ils" ? "3.70" : "4.00"}">
+            <button class="btn small" data-rate-save="${n}">Save</button>
+          </div>`).join("")}
+        <p class="err-text" id="rate-err"></p>
       </div>`;
+  }
+
+  function bindRateNotices(months) {
+    const relevant = state.rateIssues.filter((i) => !months || months.includes(i.month));
+    $screen.querySelectorAll("[data-rate-save]").forEach((btn) => btn.addEventListener("click", async () => {
+      const n = Number(btn.dataset.rateSave);
+      const input = $screen.querySelector(`[data-rate-input="${n}"]`);
+      const v = Calc.parseAmount(input.value);
+      const $err = document.getElementById("rate-err");
+      if (!Calc.validRate(v) || v > 100) { $err.textContent = "Enter a positive number, for example 3.70."; return; }
+      setBusy(btn, true, "…");
+      try {
+        await saveTypedRate(relevant[n], v);
+        toast("Rate saved");
+        route();
+      } catch (e) {
+        $err.textContent = friendlyError(e);
+        setBusy(btn, false);
+      }
+    }));
+  }
+
+  // ---------- Overview ----------
+
+  function renderOverview() {
+    const cur = state.displayCur;
+    const months = Calc.snapshotMonths(state.snapshots, state.accounts);
+    const latestBal = months.balances[0] || null;
+    if (!state.ovMonth || !months.all.includes(state.ovMonth)) state.ovMonth = latestBal || months.all[0] || null;
+    const month = state.ovMonth;
+    const idx = Calc.indexSnapshots(state.snapshots);
+    const totalsFor = (m) => Calc.monthTotals(state.accounts, idx, m, cur, state.rates, latestBal);
+
+    const head = `
+      <div class="page-head">
+        <div><div class="label">Hi, ${esc(state.me.name)}</div><h1>Overview</h1></div>
+        <a class="btn primary small" href="#update">Update</a>
+      </div>`;
+    const curSeg = `<div class="seg seg-sm" id="ov-cur">${CURRENCIES.map((c) =>
+      `<button type="button" data-cur="${c}" aria-pressed="${c === cur}">${c}</button>`).join("")}</div>`;
+
+    if (!month) {
+      $screen.innerHTML = `${head}
+        <div class="stack-lg">
+          <div class="card hero stack">
+            <div class="label">Reachable money</div>
+            <div class="big-number muted">—</div>
+            <p class="muted">No balances yet. Tap <strong>Update</strong> to paste or type this month's balances.</p>
+            <a class="btn primary block" href="#update">Add balances</a>
+          </div>
+        </div>`;
+      return;
+    }
+
+    const t = totalsFor(month);
+    const sel = `
+      <div class="month-bar">
+        <button class="icon-btn" id="ov-prev" aria-label="Earlier month" ${months.all.indexOf(month) >= months.all.length - 1 ? "disabled" : ""}>‹</button>
+        <select id="ov-month" aria-label="Month">${months.all.map((m) =>
+          `<option value="${m}" ${m === month ? "selected" : ""}>${Calc.monthLabel(m, true)}${months.balances.includes(m) ? "" : " · cards only"}</option>`).join("")}</select>
+        <button class="icon-btn" id="ov-next" aria-label="Later month" ${months.all.indexOf(month) <= 0 ? "disabled" : ""}>›</button>
+      </div>`;
+
+    // Comparisons: the calendar month before, and the first month of the same year with balances.
+    const prevM = Calc.shiftMonth(month, -1);
+    const prevT = totalsFor(prevM);
+    const yearFirst = months.balances.filter((m) => m.slice(0, 4) === month.slice(0, 4) && m < month).sort()[0] || null;
+    const firstT = yearFirst ? totalsFor(yearFirst) : null;
+
+    const changeLine = (label, field, other, otherMonth) => {
+      if (!other || !other.hasBalances) {
+        return `<div class="chg"><span class="label">${esc(label)}</span><span class="muted">No balances in ${Calc.monthLabel(otherMonth, true)}</span></div>`;
+      }
+      const c = Calc.change(t[field], other[field]);
+      return `<div class="chg"><span class="label">${esc(label)}${other.incomplete ? " · incomplete" : ""}</span>
+        <span class="mono ${toneOf(c.amount)}">${fmtSigned(c.amount, cur)} <small>${fmtPct(c.pct)}</small></span></div>`;
+    };
+    const changes = (field) => !t.hasBalances ? "" : `
+      <div class="chg-list">
+        ${changeLine(`vs ${Calc.monthLabel(prevM)}`, field, prevT, prevM)}
+        ${yearFirst && yearFirst !== prevM ? changeLine(`since ${Calc.monthLabel(yearFirst)}`, field, firstT, yearFirst) : ""}
+      </div>`;
+
+    const incompleteChip = t.incomplete && t.hasBalances ? `<span class="chip neg">Incomplete</span>` : "";
+    const hero = t.hasBalances ? `
+      <div class="card hero stack">
+        <div class="spread"><div class="label">Reachable money · ${Calc.monthLabel(month, true)}</div>${incompleteChip}</div>
+        <div class="big-number">${fmtMoney(t.reachable, cur)}</div>
+        ${changes("reachable")}
+      </div>
+      <div class="card stack">
+        <div class="label">Long-term total</div>
+        <div class="mid-number">${fmtMoney(t.longTerm, cur)}</div>
+        ${changes("longTerm")}
+      </div>` : `
+      <div class="card hero stack">
+        <div class="label">Reachable money · ${Calc.monthLabel(month, true)}</div>
+        <div class="big-number muted">—</div>
+        <p class="muted">No balances for ${Calc.monthLabel(month, true)} — only card totals.</p>
+      </div>`;
+
+    const missing = t.hasBalances && (t.missing.length || t.unconverted.length) ? `
+      <div class="card danger stack">
+        <div class="label">Incomplete month</div>
+        <p class="muted">${t.missing.length ? `${t.missing.length} account${t.missing.length > 1 ? "s have" : " has"} no balance for ${Calc.monthLabel(month, true)}, so the totals above leave ${t.missing.length > 1 ? "them" : "it"} out:` : ""}</p>
+        ${t.missing.length ? `<ul class="plain-list">${t.missing.map((a) => `<li><span>${accountName(a)}</span><span class="mono muted">${esc(TYPE_LABEL[lower(a.type)] || a.type)} · ${esc(a.updater || a.owner)}</span></li>`).join("")}</ul>` : ""}
+        ${t.unconverted.length ? `<p class="muted">Left out because an exchange rate is missing: ${t.unconverted.map(accountName).join(", ")}.</p>` : ""}
+        <a class="btn block" href="#update">Add the missing balances</a>
+      </div>` : "";
+
+    const typeCards = t.hasBalances ? TYPES.filter((ty) => ty !== "card" && t.counts[ty]).map((ty) => {
+      const v = t.byType[ty];
+      const share = ty === "loan" ? null : (t.assets > 0 ? (v / t.assets) * 100 : 0);
+      return `
+        <div class="type-card">
+          <div class="spread"><span class="label">${TYPE_LABEL[ty]}</span><span class="label">${t.counts[ty]}</span></div>
+          <div class="type-value mono ${ty === "loan" ? "neg" : ""}">${ty === "loan" ? "−" : ""}${fmtMoney(v, cur)}</div>
+          ${share == null ? `<div class="muted small">owed · subtracted</div>`
+            : `<div class="bar"><span style="width:${Math.max(2, Math.min(100, share)).toFixed(1)}%"></span></div><div class="muted small mono">${share.toFixed(1)}% of assets</div>`}
+        </div>`;
+    }).join("") : "";
+    const cardsCard = t.cardCount ? `
+      <div class="type-card">
+        <div class="spread"><span class="label">Cards</span><span class="label">${t.cardCount}</span></div>
+        <div class="type-value mono">${fmtMoney(t.cards, cur)}</div>
+        <div class="muted small">spending · not in totals</div>
+      </div>` : "";
+
+    $screen.innerHTML = `${head}
+      <div class="stack-lg">
+        <div class="row ov-controls">${sel}${curSeg}</div>
+        ${state.ratesPending ? `<p class="muted small">Fetching exchange rates…</p>` : ""}
+        ${rateNoticesHtml(months.all)}
+        ${hero}
+        ${missing}
+        ${typeCards || cardsCard ? `<div><div class="group-title"><span class="label">By type</span></div><div class="type-grid">${typeCards}${cardsCard}</div></div>` : ""}
+      </div>`;
+
+    const go = (m) => { state.ovMonth = m; route(); };
+    document.getElementById("ov-month").addEventListener("change", (e) => go(e.target.value));
+    document.getElementById("ov-prev").addEventListener("click", () => go(months.all[months.all.indexOf(month) + 1]));
+    document.getElementById("ov-next").addEventListener("click", () => go(months.all[months.all.indexOf(month) - 1]));
+    document.getElementById("ov-cur").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-cur]");
+      if (!b || b.dataset.cur === state.displayCur) return;
+      state.displayCur = b.dataset.cur;
+      LS.set("fd.displayCurrency", state.displayCur);
+      route();
+    });
+    bindRateNotices(months.all);
+  }
+
+  // ---------- Update: import box, manual form, account list ----------
+
+  const IMPORT_COLUMNS = "month | account_id | amount | currency | as_of_date";
+
+  function renderUpdate() {
+    const mode = state.updateMode || "import";
+    $screen.innerHTML = `
+      <div class="page-head">
+        <div><div class="label">Monthly update</div><h1>Update</h1></div>
+        <a class="btn small" href="#overview">Done</a>
+      </div>
+      <div class="stack-lg">
+        <div class="seg" id="up-mode">
+          <button type="button" data-mode="import" aria-pressed="${mode === "import"}">PASTE ROWS</button>
+          <button type="button" data-mode="manual" aria-pressed="${mode === "manual"}">ONE BALANCE</button>
+        </div>
+        <div id="up-body"></div>
+      </div>`;
+    document.getElementById("up-mode").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-mode]");
+      if (!b || b.dataset.mode === mode) return;
+      if (mode === "import") state.imp.text = document.getElementById("imp-text").value;
+      state.updateMode = b.dataset.mode;
+      renderUpdate();
+    });
+    if (mode === "import") renderImport(); else renderManual();
+  }
+
+  function copyAccountList() {
+    const lines = state.accounts.filter(isActive)
+      .map((a) => [a.id, norm(a.nickname), norm(a.currency).toUpperCase(), norm(a.owner)].join(" | "))
+      .join("\n");
+    if (!lines) { toast("No active accounts yet", true); return; }
+    const fallback = () => {
+      openSheet(`
+        <div class="stack-lg">
+          <div class="spread"><div><div class="label">Account list</div><h2>Copy this</h2></div>
+            <button type="button" class="icon-btn" data-close aria-label="Close">✕</button></div>
+          <textarea id="acct-list" readonly>${esc(lines)}</textarea>
+          <p class="muted">Tap the text, Select All, then Copy.</p>
+        </div>`);
+      const ta = document.getElementById("acct-list");
+      ta.focus(); ta.select();
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(lines).then(
+        () => toast(`Copied ${lines.split("\n").length} accounts`),
+        fallback,
+      );
+    } else fallback();
+  }
+
+  function renderImport() {
+    const body = document.getElementById("up-body");
+    body.innerHTML = `
+      <div class="stack-lg">
+        <div class="card stack">
+          <div class="label">Paste balances</div>
+          <p class="muted">One balance per line:</p>
+          <div class="code">${IMPORT_COLUMNS}</div>
+          <p class="muted small">Example: <span class="mono">${esc(Calc.currentMonth())} | bank-a-cur | 12,345.67 | ILS | ${esc(Calc.today())}</span><br>
+            For cards, use the charge month and the card's monthly total. Nothing is saved until you approve the preview.</p>
+          <button class="btn block" id="imp-copy">Copy account list</button>
+        </div>
+        <textarea id="imp-text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="${esc(IMPORT_COLUMNS)}">${esc(state.imp.text)}</textarea>
+        <button class="btn primary block" id="imp-check">Check</button>
+        <div id="imp-preview"></div>
+      </div>`;
+    document.getElementById("imp-copy").addEventListener("click", copyAccountList);
+    const $text = document.getElementById("imp-text");
+    $text.addEventListener("input", () => { state.imp.text = $text.value; });
+    document.getElementById("imp-check").addEventListener("click", () => {
+      state.imp.text = $text.value;
+      if (!$text.value.trim()) { toast("Paste some rows first", true); return; }
+      state.imp.rows = Calc.splitImport($text.value);
+      recheckImport();
+      renderImportPreview(true);
+    });
+    if (state.imp.rows) { recheckImport(); renderImportPreview(false); }
+  }
+
+  function recheckImport() {
+    Calc.checkImport(state.imp.rows, {
+      accounts: state.accounts, idx: Calc.indexSnapshots(state.snapshots), rates: state.rates, now: new Date(),
+    });
+  }
+
+  function renderImportPreview(scroll) {
+    const host = document.getElementById("imp-preview");
+    const rows = state.imp.rows || [];
+    if (!rows.length) { host.innerHTML = `<p class="muted">No rows to check.</p>`; return; }
+    const good = rows.filter((r) => !r.problems.length);
+    const bad = rows.length - good.length;
+    const cellBad = (r, col) => r.problems.some((p) => p.col === col);
+    const show = (r, col, text) => `<span class="${cellBad(r, col) ? "bad-cell" : ""}">${esc(text || (cellBad(r, col) ? "(empty)" : "—"))}</span>`;
+
+    host.innerHTML = `
+      <div class="stack">
+        <div class="spread"><h2>${good.length} ready${bad ? `, <span class="neg">${bad} with problems</span>` : ""}</h2></div>
+        <p class="muted">${bad ? "Rows in red will be skipped. Edit them to fix, or remove them." : "Nothing is saved yet. Review, then approve."}</p>
+        ${rows.map((r, i) => {
+          const z = r.resolved;
+          const a = z && z.account;
+          const cur = z ? z.currency : norm(r.currency).toUpperCase();
+          const amountOk = z && !cellBad(r, "amount") && isFinite(z.amount);
+          let prevLine = "";
+          if (z && z.prev && isFinite(z.prev.amount)) {
+            prevLine = `<div class="mono small">${Calc.monthLabel(z.prev.month)}: ${fmtMoney(z.prev.amount, cur, true)}
+              ${z.delta ? ` → <span class="${toneOf(z.delta.amount)}">${fmtSigned(z.delta.amount, cur)} ${fmtPct(z.delta.pct)}</span>` : ""}</div>`;
+          } else if (z && z.month) {
+            prevLine = `<div class="muted small">No balance for ${Calc.monthLabel(Calc.shiftMonth(z.month, -1))}</div>`;
+          }
+          const chips = [];
+          if (z && z.existing) chips.push(`<span class="chip warn">Replaces ${esc(fmtMoney(Calc.parseAmount(z.existing.amount), cur, true))}</span>`);
+          if (z && z.large && !r.problems.length) chips.push(`<span class="chip warn">Large change</span>`);
+          return `
+            <div class="preview-row ${r.problems.length ? "bad" : z && z.large ? "warn" : ""}">
+              <div class="spread">
+                <strong>${a ? accountName(a) : show(r, "account_id", r.account_id)}</strong>
+                <span class="mono small">${show(r, "month", z && z.month ? Calc.monthLabel(z.month, true) : r.month)}</span>
+              </div>
+              <div class="spread" style="margin-top:4px">
+                <span class="mono imp-amount">${amountOk ? esc(fmtMoney(z.amount, cur, true)) : show(r, "amount", r.amount)}</span>
+                <span class="mono small">${show(r, "currency", cur)}${z && z.as_of_date ? ` · ${show(r, "as_of_date", z.as_of_date)}` : cellBad(r, "as_of_date") ? ` · ${show(r, "as_of_date", r.as_of_date)}` : ""}</span>
+              </div>
+              ${prevLine}
+              ${chips.length ? `<div class="row wrap" style="margin-top:8px">${chips.join("")}</div>` : ""}
+              ${r.problems.length || r.warnings.length ? `<div class="problems">
+                ${r.problems.map((p) => `<span class="err-text">✕ ${esc(p.msg)}</span>`).join("")}
+                ${r.warnings.map((w) => `<span class="muted small">• ${esc(w)}</span>`).join("")}
+              </div>` : ""}
+              <div class="row" style="margin-top:10px">
+                <button class="btn small" data-imp-edit="${i}">Edit</button>
+                <button class="btn small ghost" data-imp-remove="${i}">Remove</button>
+              </div>
+            </div>`;
+        }).join("")}
+        <p class="err-text" id="imp-err"></p>
+        <button class="btn primary block" id="imp-approve" ${good.length ? "" : "disabled"}>${good.length ? `Approve and save ${good.length} balance${good.length > 1 ? "s" : ""}` : "Nothing to save"}</button>
+        <button class="btn ghost block" id="imp-clear">Clear</button>
+      </div>`;
+
+    host.querySelectorAll("[data-imp-remove]").forEach((b) => b.addEventListener("click", () => {
+      state.imp.rows.splice(Number(b.dataset.impRemove), 1);
+      recheckImport();
+      renderImportPreview(false);
+    }));
+    host.querySelectorAll("[data-imp-edit]").forEach((b) => b.addEventListener("click", () => openImportRowEditor(Number(b.dataset.impEdit))));
+    document.getElementById("imp-clear").addEventListener("click", () => {
+      state.imp = { text: "", rows: null };
+      renderUpdate();
+    });
+    const approve = document.getElementById("imp-approve");
+    approve.addEventListener("click", () => approveImport(approve));
+    if (scroll) host.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function openImportRowEditor(i) {
+    const r = state.imp.rows[i];
+    const z = r.resolved;
+    const month = (z && z.month) || Calc.normMonth(r.month) || "";
+    const acctId = z && z.account ? z.account.id : r.account_id;
+    const cur = (z && z.currency) || norm(r.currency).toUpperCase() || "ILS";
+    const date = (z && z.as_of_date) || Calc.normDate(r.as_of_date) || "";
+    const accts = [...state.accounts].sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname)));
+    openSheet(`
+      <form id="ire-form" class="stack-lg" novalidate>
+        <div class="spread"><div><div class="label">Edit row ${i + 1}</div><h2>Fix this row</h2></div>
+          <button type="button" class="icon-btn" data-close aria-label="Close">✕</button></div>
+        <div class="code">${esc(r.line || "")}</div>
+        <div class="field"><label class="label" for="ire-acct">Account</label>
+          <select id="ire-acct">${options(accts.map((a) => [a.id, `${norm(a.nickname) || a.id} (${a.id})`]), acctId, "Choose…")}</select></div>
+        <div class="field-row">
+          <div class="field"><label class="label" for="ire-month">Month</label><input id="ire-month" type="month" value="${esc(month)}"></div>
+          <div class="field"><label class="label" for="ire-date">As-of date</label><input id="ire-date" type="date" value="${esc(date)}"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label class="label" for="ire-amount">Amount</label><input id="ire-amount" type="text" inputmode="decimal" value="${esc(z && isFinite(z.amount) ? z.amount : r.amount)}"></div>
+          <div class="field"><label class="label" for="ire-cur">Currency</label><select id="ire-cur">${options(CURRENCIES, cur)}</select></div>
+        </div>
+        <button class="btn primary block" type="submit">Update row</button>
+      </form>`);
+    const $acct = document.getElementById("ire-acct");
+    $acct.addEventListener("change", () => {
+      const a = state.accounts.find((x) => x.id === $acct.value);
+      if (a) document.getElementById("ire-cur").value = norm(a.currency).toUpperCase();
+    });
+    document.getElementById("ire-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const v = (id) => document.getElementById(id).value.trim();
+      Object.assign(r, {
+        account_id: v("ire-acct"), month: v("ire-month"), as_of_date: v("ire-date"),
+        amount: v("ire-amount"), currency: v("ire-cur"), columns: null,
+      });
+      r.line = [r.month, r.account_id, r.amount, r.currency, r.as_of_date].join(" | ");
+      closeSheet();
+      recheckImport();
+      renderImportPreview(false);
+    });
+  }
+
+  const newSnapshotId = () => `s-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+  // Saves checked rows: replaces an existing snapshot for the same account and month, else appends.
+  async function saveSnapshots(items, source) {
+    await reloadSnapshots();
+    const idx = Calc.indexSnapshots(state.snapshots);
+    const enteredAt = new Date().toISOString();
+    const cells = [];
+    const appends = [];
+    items.forEach((z) => {
+      const values = {
+        month: z.month, account_id: z.account.id, amount: z.amount, currency: z.currency,
+        as_of_date: z.as_of_date, entered_by: state.me.name, entered_at: enteredAt, source,
+      };
+      const existing = idx.get(norm(z.account.id), z.month);
+      if (existing) {
+        if (!norm(existing.id)) values.id = newSnapshotId();
+        Object.entries(values).forEach(([field, value]) => cells.push({ row: existing._row, field, value }));
+      } else {
+        appends.push({ id: newSnapshotId(), ...values });
+      }
+    });
+    if (cells.length) await Sheets.setCells("Snapshots", state.snapHeader, cells, "RAW");
+    if (appends.length) await Sheets.appendRows("Snapshots", appends);
+    await reloadSnapshots();
+    return { replaced: items.length - appends.length, added: appends.length };
+  }
+
+  async function approveImport(btn) {
+    const $err = document.getElementById("imp-err");
+    setBusy(btn, true, "Saving…");
+    try {
+      const res = await guarded(async () => {
+        await reloadSnapshots();
+        recheckImport(); // a partner may have saved in the meantime
+        const good = state.imp.rows.filter((r) => !r.problems.length).map((r) => r.resolved);
+        if (!good.length) throw new Error("Nothing left to save.");
+        const out = await saveSnapshots(good, "import");
+        out.latest = good.filter((z) => lower(z.account.type) !== "card").map((z) => z.month).sort().pop() || null;
+        return out;
+      });
+      state.imp = { text: "", rows: null };
+      syncRatesInBackground();
+      toast(`Saved ${res.added + res.replaced} balance${res.added + res.replaced > 1 ? "s" : ""}${res.replaced ? ` (${res.replaced} replaced)` : ""}`);
+      if (res.latest) state.ovMonth = res.latest;
+      location.hash = "overview";
+    } catch (e) {
+      $err.textContent = friendlyError(e);
+      setBusy(btn, false);
+    }
+  }
+
+  function renderManual() {
+    const body = document.getElementById("up-body");
+    const meName = lower(state.me.name);
+    const active = state.accounts.filter(isActive);
+    const isMine = (a) => [lower(a.owner), lower(a.updater)].includes(meName) || lower(a.owner) === lower(JOINT);
+    const mine = active.filter(isMine).sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname)));
+    const others = active.filter((a) => !isMine(a)).sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname)));
+    const showAll = state.manualShowAll || !mine.length;
+    const keep = state.manualDraft || {};
+    const label = (a) => `${norm(a.nickname) || a.id} · ${norm(a.currency).toUpperCase()}`;
+    if (!active.length) {
+      body.innerHTML = `<div class="card empty stack"><p class="muted">Add accounts first, on the Accounts tab.</p><a class="btn block" href="#accounts">Go to Accounts</a></div>`;
+      return;
+    }
+    body.innerHTML = `
+      <form id="man-form" class="card stack-lg" novalidate>
+        <div class="field"><label class="label" for="man-acct">Account</label>
+          <select id="man-acct">
+            <optgroup label="Mine & joint">${options(mine.map((a) => [a.id, label(a)]), keep.account_id)}</optgroup>
+            ${showAll && others.length ? `<optgroup label="Other accounts">${options(others.map((a) => [a.id, label(a)]), keep.account_id)}</optgroup>` : ""}
+          </select>
+          ${others.length ? `<button type="button" class="link-btn" id="man-all">${showAll ? "Show only mine & joint" : `Show all accounts (${others.length} more)`}</button>` : ""}
+        </div>
+        <div class="field-row">
+          <div class="field"><label class="label" for="man-month">Month</label><input id="man-month" type="month" value="${esc(keep.month || Calc.currentMonth())}"></div>
+          <div class="field"><label class="label" for="man-date">As-of date</label><input id="man-date" type="date" value="${esc(keep.as_of_date || Calc.today())}"></div>
+        </div>
+        <div class="field"><label class="label" for="man-amount">Amount <span id="man-cur" class="chip accent" style="margin-left:6px"></span></label>
+          <input id="man-amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0" value="${esc(keep.amount || "")}"></div>
+        <div id="man-context" class="stack"></div>
+        <p class="err-text" id="man-err"></p>
+        <button class="btn primary block" type="submit" id="man-save">Save balance</button>
+      </form>`;
+    const $acct = document.getElementById("man-acct");
+    const $month = document.getElementById("man-month");
+    const $amount = document.getElementById("man-amount");
+    const $date = document.getElementById("man-date");
+    let confirmedLarge = false;
+    const draft = () => ({ account_id: $acct.value, month: $month.value, amount: $amount.value, as_of_date: $date.value });
+
+    const check = () => {
+      const a = state.accounts.find((x) => x.id === $acct.value);
+      const row = { ...draft(), currency: a ? norm(a.currency).toUpperCase() : "", columns: null };
+      Calc.checkImport([row], { accounts: state.accounts, idx: Calc.indexSnapshots(state.snapshots), rates: state.rates, now: new Date() });
+      return row;
+    };
+    const updateContext = () => {
+      state.manualDraft = draft();
+      confirmedLarge = false;
+      document.getElementById("man-save").textContent = "Save balance";
+      const a = state.accounts.find((x) => x.id === $acct.value);
+      const cur = a ? norm(a.currency).toUpperCase() : "";
+      document.getElementById("man-cur").textContent = cur;
+      const row = check();
+      const z = row.resolved;
+      const bits = [];
+      const m = Calc.normMonth($month.value);
+      if (a && m) {
+        const idx = Calc.indexSnapshots(state.snapshots);
+        const prev = idx.get(a.id, Calc.shiftMonth(m, -1));
+        bits.push(prev ? `<span class="muted small mono">${Calc.monthLabel(Calc.shiftMonth(m, -1))}: ${fmtMoney(Calc.parseAmount(prev.amount), cur, true)}</span>`
+          : `<span class="muted small">No balance for ${Calc.monthLabel(Calc.shiftMonth(m, -1))}.</span>`);
+        const ex = idx.get(a.id, m);
+        if (ex) bits.push(`<span class="chip warn">A balance for ${Calc.monthLabel(m)} exists (${esc(fmtMoney(Calc.parseAmount(ex.amount), cur, true))}) — saving replaces it</span>`);
+      }
+      if (z && z.delta && $amount.value.trim()) {
+        bits.push(`<span class="mono small ${toneOf(z.delta.amount)}">Change: ${fmtSigned(z.delta.amount, cur)} ${fmtPct(z.delta.pct)}${z.large ? " · large change" : ""}</span>`);
+      }
+      document.getElementById("man-context").innerHTML = bits.join("");
+    };
+    [$acct, $month, $amount, $date].forEach((el) => el.addEventListener("input", updateContext));
+    $acct.addEventListener("change", updateContext);
+    updateContext();
+    const allBtn = document.getElementById("man-all");
+    if (allBtn) allBtn.addEventListener("click", () => { state.manualShowAll = !showAll; state.manualDraft = draft(); renderManual(); });
+
+    document.getElementById("man-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const $err = document.getElementById("man-err");
+      const row = check();
+      if (!norm($amount.value)) { $err.textContent = "Enter the amount."; return; }
+      if (row.problems.length) { $err.textContent = row.problems[0].msg; return; }
+      if (row.resolved.large && !confirmedLarge) {
+        confirmedLarge = true;
+        $err.textContent = "That is a large change from last month. Check the amount, then tap again to save.";
+        document.getElementById("man-save").textContent = "Save anyway";
+        return;
+      }
+      $err.textContent = "";
+      const btn = document.getElementById("man-save");
+      setBusy(btn, true, "Saving…");
+      try {
+        const res = await guarded(() => saveSnapshots([row.resolved], "manual"));
+        syncRatesInBackground();
+        toast(res.replaced ? "Balance replaced" : "Balance saved");
+        state.manualDraft = { month: $month.value, as_of_date: $date.value };
+        if (lower(row.resolved.account.type) !== "card") state.ovMonth = row.resolved.month;
+        renderManual();
+      } catch (ex) {
+        $err.textContent = friendlyError(ex);
+        setBusy(btn, false);
+      }
+    });
   }
 
   // ---------- Settings ----------

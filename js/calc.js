@@ -1,0 +1,340 @@
+// Pure calculations: months, amounts, exchange rates, monthly totals and import checks.
+// No DOM and no network here, so this file can be tested on its own.
+(function (root) {
+  "use strict";
+
+  const TYPES = ["current", "savings", "investment", "crypto", "long_term", "loan", "home", "card"];
+  const ASSET_TYPES = ["current", "savings", "investment", "crypto", "long_term", "home"];
+  const CURRENCIES = ["ILS", "USD", "EUR"];
+  const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  // A change is "large" when it is over 25% AND over this many ILS (converted), so small accounts don't trip it.
+  const LARGE_CHANGE_RATIO = 0.25;
+  const TRIVIAL_ILS = 1000;
+
+  const norm = (v) => String(v == null ? "" : v).trim();
+  const lower = (v) => norm(v).toLowerCase();
+  const pad = (n) => String(n).padStart(2, "0");
+
+  // ---------- months and dates ----------
+
+  function currentMonth(d) {
+    d = d || new Date();
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+  }
+  function today(d) {
+    d = d || new Date();
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+  const isMonth = (s) => /^\d{4}-(0[1-9]|1[0-2])$/.test(s);
+
+  // Accepts YYYY-MM, YYYY-M, YYYY-MM-DD, MM/YYYY. Returns YYYY-MM or null.
+  function normMonth(v) {
+    const s = norm(v);
+    let m = s.match(/^(\d{4})[-/.](\d{1,2})(?:[-/.]\d{1,2})?$/);
+    if (m) { const r = `${m[1]}-${pad(+m[2])}`; return isMonth(r) ? r : null; }
+    m = s.match(/^(\d{1,2})[-/.](\d{4})$/);
+    if (m) { const r = `${m[2]}-${pad(+m[1])}`; return isMonth(r) ? r : null; }
+    return null;
+  }
+
+  function shiftMonth(month, n) {
+    const [y, m] = month.split("-").map(Number);
+    const t = y * 12 + (m - 1) + n;
+    return `${Math.floor(t / 12)}-${pad((t % 12) + 1)}`;
+  }
+
+  function monthLabel(month, long) {
+    if (!isMonth(month)) return norm(month);
+    const [y, m] = month.split("-").map(Number);
+    return long ? `${MONTH_NAMES[m - 1]} ${y}` : `${MONTH_NAMES[m - 1]} ${String(y).slice(2)}`;
+  }
+
+  function lastDayOfMonth(month) {
+    const [y, m] = month.split("-").map(Number);
+    return `${month}-${pad(new Date(y, m, 0).getDate())}`;
+  }
+
+  // Accepts YYYY-MM-DD, DD/MM/YYYY, DD.MM.YYYY, DD-MM-YYYY. Returns YYYY-MM-DD or null.
+  function normDate(v) {
+    const s = norm(v);
+    let y, mo, d;
+    let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (m) { [, y, mo, d] = m; } else {
+      m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/);
+      if (!m) return null;
+      [, d, mo, y] = m;
+    }
+    y = +y; mo = +mo; d = +d;
+    const dt = new Date(y, mo - 1, d);
+    if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+    return `${y}-${pad(mo)}-${pad(d)}`;
+  }
+
+  // "12,345.60", "₪ 1 200", "$800" -> number. Returns NaN when it isn't a plain number.
+  function parseAmount(v) {
+    if (typeof v === "number") return v;
+    const s = norm(v).replace(/[\s,₪$€]|ILS|USD|EUR/gi, "");
+    if (!/^-?\d+(\.\d+)?$/.test(s)) return NaN;
+    return Number(s);
+  }
+
+  // ---------- rates ----------
+
+  const validRate = (v) => typeof v === "number" && isFinite(v) && v > 0;
+
+  // Rates rows -> sorted list of { month, usd, eur } (invalid cells become null). First row per month wins.
+  function rateTable(rows) {
+    const seen = new Set();
+    const out = [];
+    rows.forEach((r) => {
+      const month = normMonth(r.month);
+      if (!month || seen.has(month)) return;
+      seen.add(month);
+      out.push({ month, usd: validRate(r.usd_ils) ? r.usd_ils : null, eur: validRate(r.eur_ils) ? r.eur_ils : null });
+    });
+    return out.sort((a, b) => a.month.localeCompare(b.month));
+  }
+
+  // The ILS rate of `cur` for `month`. The latest row covers every month from it onward; a past month
+  // uses its own row, falling back to the nearest earlier then later month with a valid number.
+  function rateFor(table, month, cur) {
+    if (cur === "ILS") return { rate: 1, month, exact: true };
+    const key = cur === "USD" ? "usd" : "eur";
+    const valid = table.filter((r) => r[key] != null);
+    if (!valid.length) return null;
+    const latestRow = table[table.length - 1];
+    if (month >= latestRow.month) {
+      if (latestRow[key] != null) return { rate: latestRow[key], month: latestRow.month, exact: true };
+      const last = valid[valid.length - 1];
+      return { rate: last[key], month: last.month, exact: false };
+    }
+    const exact = table.find((r) => r.month === month);
+    if (exact && exact[key] != null) return { rate: exact[key], month, exact: true };
+    const earlier = valid.filter((r) => r.month < month);
+    const pick = earlier.length ? earlier[earlier.length - 1] : valid[0];
+    return { rate: pick[key], month: pick.month, exact: false };
+  }
+
+  // Converts through ILS. Returns null if a needed rate is missing.
+  function convert(amount, from, to, table, month) {
+    if (from === to) return amount;
+    const a = rateFor(table, month, from);
+    const b = rateFor(table, month, to);
+    if (!a || !b) return null;
+    return (amount * a.rate) / b.rate;
+  }
+
+  // ---------- snapshots and totals ----------
+
+  function isActive(a) {
+    if (a.active === false) return false;
+    return !/^(false|no|0|n)$/i.test(norm(a.active));
+  }
+
+  // Index snapshots by account and month. Later rows win if the sheet somehow holds duplicates.
+  function indexSnapshots(snaps) {
+    const byKey = new Map();
+    const firstMonth = new Map();
+    const byAccount = new Map();
+    snaps.forEach((s) => {
+      const month = normMonth(s.month);
+      const id = norm(s.account_id);
+      if (!month || !id) return;
+      byKey.set(`${id}|${month}`, s);
+      if (!firstMonth.has(id) || month < firstMonth.get(id)) firstMonth.set(id, month);
+      if (!byAccount.has(id)) byAccount.set(id, []);
+      byAccount.get(id).push({ month, snap: s });
+    });
+    byAccount.forEach((list) => list.sort((a, b) => a.month.localeCompare(b.month)));
+    return { byKey, firstMonth, byAccount, get: (id, month) => byKey.get(`${id}|${month}`) || null };
+  }
+
+  // Months that hold any snapshot, newest first; and those that hold balances (non-card) only.
+  function snapshotMonths(snaps, accounts) {
+    const typeOf = new Map(accounts.map((a) => [norm(a.id), lower(a.type)]));
+    const all = new Set();
+    const balances = new Set();
+    snaps.forEach((s) => {
+      const m = normMonth(s.month);
+      if (!m) return;
+      all.add(m);
+      if (typeOf.get(norm(s.account_id)) !== "card") balances.add(m);
+    });
+    const desc = (set) => [...set].sort().reverse();
+    return { all: desc(all), balances: desc(balances) };
+  }
+
+  // The balance an account contributes to `month`: its own snapshot, or for an active home the
+  // latest earlier one carried forward. Returns null when there is none.
+  function balanceFor(account, month, idx) {
+    const id = norm(account.id);
+    const own = idx.get(id, month);
+    if (own) return { snap: own, month, carried: false };
+    if (lower(account.type) === "home" && isActive(account)) {
+      const list = (idx.byAccount.get(id) || []).filter((x) => x.month < month);
+      if (list.length) { const last = list[list.length - 1]; return { snap: last.snap, month: last.month, carried: true }; }
+    }
+    return null;
+  }
+
+  // Totals for one month in the display currency, converted with that month's rate.
+  // An active non-card account is expected from its first snapshot onward (or, if it has none yet,
+  // from the latest month with balances); a missing expected balance marks the month incomplete.
+  function monthTotals(accounts, idx, month, display, rates, latestBalanceMonth) {
+    const byType = {};
+    TYPES.forEach((t) => { byType[t] = 0; });
+    const counts = {};
+    const missing = [];
+    const unconverted = [];
+    let balances = 0;
+    let cards = 0;
+    let cardCount = 0;
+
+    accounts.forEach((a) => {
+      const type = lower(a.type);
+      if (!TYPES.includes(type)) return;
+      const b = balanceFor(a, month, idx);
+      if (!b) {
+        if (type === "card" || !isActive(a)) return;
+        const first = idx.firstMonth.get(norm(a.id));
+        const expected = first ? first <= month : (latestBalanceMonth && month >= latestBalanceMonth);
+        if (expected) missing.push(a);
+        return;
+      }
+      const amt = parseAmount(b.snap.amount);
+      if (!isFinite(amt)) return;
+      const cur = norm(b.snap.currency).toUpperCase() || norm(a.currency).toUpperCase();
+      const v = convert(Math.abs(amt), cur, display, rates, month);
+      if (v == null) { unconverted.push(a); return; }
+      if (type === "card") { cards += v; cardCount++; return; }
+      if (!b.carried) balances++;
+      byType[type] += v;
+      counts[type] = (counts[type] || 0) + 1;
+    });
+
+    const reachable = byType.current;
+    const assets = ASSET_TYPES.reduce((s, t) => s + byType[t], 0);
+    const longTerm = assets - byType.loan;
+    return {
+      month, reachable, longTerm, assets, byType, counts, cards, cardCount, missing, unconverted,
+      hasBalances: balances > 0,
+      incomplete: missing.length > 0 || unconverted.length > 0,
+    };
+  }
+
+  function change(now, before) {
+    if (now == null || before == null) return null;
+    const amount = now - before;
+    const pct = before !== 0 ? (amount / Math.abs(before)) * 100 : null;
+    return { amount, pct };
+  }
+
+  // ---------- import ----------
+
+  // Splits pasted text into raw rows: month | account_id | amount | currency | as_of_date
+  function splitImport(text) {
+    const rows = [];
+    text.split(/\r?\n/).forEach((line) => {
+      if (!line.trim()) return;
+      const cells = line.split("|").map((c) => c.trim());
+      if (lower(cells[0]) === "month" && lower(cells[1]) === "account_id") return; // header line
+      while (cells.length > 5 && cells[cells.length - 1] === "") cells.pop();
+      rows.push({
+        line: line.trim(), columns: cells.length,
+        month: cells[0] || "", account_id: cells[1] || "", amount: cells[2] || "",
+        currency: cells[3] || "", as_of_date: cells[4] || "",
+      });
+    });
+    return rows;
+  }
+
+  // Checks every import row. ctx: { accounts, idx, rates, now (Date) }.
+  // Adds to each row: problems[] (block saving), warnings[] (shown only) and the resolved values.
+  function checkImport(rows, ctx) {
+    const byId = new Map(ctx.accounts.map((a) => [lower(a.id), a]));
+    const nowMonth = currentMonth(ctx.now);
+    const todayStr = today(ctx.now);
+    const seen = new Map();
+    rows.forEach((r) => {
+      const problems = [];
+      const warnings = [];
+      r.resolved = null;
+      if (r.columns != null && (r.columns < 3 || r.columns > 5)) {
+        r.problems = [{ col: null, msg: `Malformed line: expected 5 columns separated by |, found ${r.columns}.` }];
+        r.warnings = warnings;
+        return;
+      }
+      const account = byId.get(lower(r.account_id)) || null;
+      if (!norm(r.account_id)) problems.push({ col: "account_id", msg: "Missing account id." });
+      else if (!account) problems.push({ col: "account_id", msg: `Unknown account id "${norm(r.account_id)}".` });
+      const type = account ? lower(account.type) : "";
+
+      const month = normMonth(r.month);
+      if (!month) problems.push({ col: "month", msg: `Bad month "${norm(r.month)}". Use YYYY-MM.` });
+      else if (month > shiftMonth(nowMonth, type === "card" ? 1 : 0)) problems.push({ col: "month", msg: `${monthLabel(month, true)} is in the future.` });
+      else if (month < "2000-01") problems.push({ col: "month", msg: "Month is too far in the past." });
+
+      const amount = parseAmount(r.amount);
+      if (norm(r.amount) === "" || isNaN(amount)) problems.push({ col: "amount", msg: `Amount "${norm(r.amount)}" is not a number.` });
+      else if (amount < 0) problems.push({ col: "amount", msg: "Amounts are always positive (enter a loan as the amount still owed)." });
+
+      const acctCur = account ? norm(account.currency).toUpperCase() : "";
+      let currency = norm(r.currency).toUpperCase() || acctCur;
+      if (!CURRENCIES.includes(currency)) problems.push({ col: "currency", msg: `Unknown currency "${norm(r.currency)}".` });
+      else if (account && currency !== acctCur) problems.push({ col: "currency", msg: `${currency} differs from the account's currency (${acctCur}).` });
+
+      let asOf = null;
+      if (norm(r.as_of_date)) {
+        asOf = normDate(r.as_of_date);
+        if (!asOf) problems.push({ col: "as_of_date", msg: `Bad date "${norm(r.as_of_date)}". Use YYYY-MM-DD.` });
+        else if (asOf > todayStr) problems.push({ col: "as_of_date", msg: "The as-of date is in the future." });
+        else if (month && type !== "card" && asOf.slice(0, 7) !== month) warnings.push(`As-of date ${asOf} is outside ${monthLabel(month, true)}.`);
+      } else if (month) {
+        asOf = month === nowMonth ? todayStr : (month < nowMonth ? lastDayOfMonth(month) : todayStr);
+        warnings.push(`No as-of date; ${asOf} will be used.`);
+      }
+
+      if (account && !isActive(account)) warnings.push("This account is inactive.");
+
+      if (account && month) {
+        const key = `${lower(account.id)}|${month}`;
+        if (seen.has(key)) problems.push({ col: "account_id", msg: `Same account and month as row ${seen.get(key) + 1}.` });
+        else seen.set(key, rows.indexOf(r));
+      }
+
+      let existing = null, prev = null, delta = null, large = false;
+      if (account && month && !isNaN(amount)) {
+        existing = ctx.idx.get(norm(account.id), month);
+        const p = ctx.idx.get(norm(account.id), shiftMonth(month, -1));
+        if (p) {
+          prev = { amount: parseAmount(p.amount), month: shiftMonth(month, -1) };
+          if (isFinite(prev.amount)) {
+            delta = change(amount, prev.amount);
+            const deltaIls = convert(Math.abs(delta.amount), acctCur || "ILS", "ILS", ctx.rates, month);
+            const bigEnough = deltaIls == null ? Math.abs(delta.amount) > TRIVIAL_ILS : deltaIls > TRIVIAL_ILS;
+            const ratio = prev.amount === 0 ? (amount > 0 ? Infinity : 0) : Math.abs(delta.amount) / prev.amount;
+            large = ratio > LARGE_CHANGE_RATIO && bigEnough;
+          }
+        }
+      }
+      r.problems = problems;
+      r.warnings = warnings;
+      if (account) {
+        r.resolved = {
+          account, month, amount, currency, as_of_date: asOf, existing, prev, delta, large,
+        };
+      }
+    });
+    return rows;
+  }
+
+  const api = {
+    TYPES, ASSET_TYPES, CURRENCIES, MONTH_NAMES, LARGE_CHANGE_RATIO, TRIVIAL_ILS,
+    currentMonth, today, isMonth, normMonth, shiftMonth, monthLabel, lastDayOfMonth, normDate, parseAmount,
+    validRate, rateTable, rateFor, convert,
+    isActive, indexSnapshots, snapshotMonths, balanceFor, monthTotals, change,
+    splitImport, checkImport,
+  };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.Calc = api;
+})(this);
