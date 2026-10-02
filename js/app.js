@@ -3,13 +3,13 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.02-18";
+  const APP_VERSION = "2026.10.02-19";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
-  const TYPES = ["current", "savings", "investment", "crypto", "long_term", "loan", "home", "card"];
+  const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card"];
   const TYPE_LABEL = {
     current: "Bank", savings: "Savings", investment: "Investment", crypto: "Crypto",
-    long_term: "Long-term", loan: "Loan", home: "Home", card: "Card",
+    long_term: "Pension", study_fund: "Keren Hishtalmut", loan: "Loan", home: "Home", card: "Card",
   };
   const CURRENCIES = ["ILS", "USD", "EUR"];
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -1309,7 +1309,7 @@
   // ---------- Trends ----------
 
   const PERIODS = { year: "This year", "12m": "12 months", all: "All" };
-  const STACK_TYPES = ["current", "savings", "investment", "crypto", "long_term", "home"];
+  const STACK_TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "home"];
 
   function renderTrends() {
     const cur = state.displayCur;
@@ -1661,7 +1661,7 @@
       return months.length ? `estimate from ${Calc.monthLabel(months[months.length - 1])} · yearly` : "yearly estimate";
     };
     // Long-term view: each long-term type with total, share of assets and change vs the previous month.
-    const LT_TYPES = ["savings", "investment", "crypto", "long_term", "home"];
+    const LT_TYPES = ["savings", "investment", "crypto", "long_term", "study_fund", "home"];
     const typeCards = t.hasBalances ? LT_TYPES.filter((ty) => t.counts[ty]).map((ty) => {
       const v = t.byType[ty];
       const share = t.assets > 0 ? (v / t.assets) * 100 : 0;
@@ -2944,7 +2944,9 @@
       if (!owner) problems.push({ col: "owner", msg: `Unknown owner "${c.owner}". Use ${owners.join(", ")}.` });
 
       let type = lower(c.type).replace(/[\s-]+/g, "_");
-      if (type === "bank") type = "current"; // "Bank" is the display name of type current
+      // Display names and common words accepted for types.
+      type = { bank: "current", pension: "long_term", study_fund: "study_fund", keren_hishtalmut: "study_fund",
+        hishtalmut: "study_fund", keren: "study_fund", keren_hashtalmut: "study_fund" }[type] || type;
       if (!TYPES.includes(type)) problems.push({ col: "type", msg: `Unknown type "${c.type}".` });
 
       const updater = matchName(c.updater, names);
@@ -2982,7 +2984,7 @@
         </div>
         <p class="muted">One account per line, columns separated by <span class="mono">|</span>:</p>
         <div class="code">${BULK_COLUMNS.join(" | ")}</div>
-        <p class="muted" style="font-size:14px">Owner is ${esc([...personNames(), JOINT].join(", "))}. Type is one of ${TYPES.map((t) => (t === "current" ? "bank (or current)" : t)).join(", ")}. The last column is only for cards and may be left empty.</p>
+        <p class="muted" style="font-size:14px">Owner is ${esc([...personNames(), JOINT].join(", "))}. Type is one of ${TYPES.map((t) => ({ current: "bank", long_term: "pension", study_fund: "keren_hishtalmut" }[t] || t)).join(", ")}. The last column is only for cards and may be left empty.</p>
         <textarea id="bulk-text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="${esc(BULK_EXAMPLE)}">${esc(typeof prefill === "string" ? prefill : "")}</textarea>
         <button class="btn primary block" id="bulk-check">Check</button>
       </div>`);

@@ -11,7 +11,7 @@
   // Colours for account types, validated as a set against the panel colour (#12101C).
   const TYPE_COLORS = {
     current: "#3987e5", savings: "#d95926", investment: "#199e70", crypto: "#c98500",
-    long_term: "#d55181", home: "#008300", loan: "#e66767",
+    long_term: "#d55181", study_fund: "#9085e9", home: "#008300", loan: "#e66767",
   };
   const LINE_COLOR = "#A47BFF";
   // Categorical slots in fixed order (validated against the panel colour); an entity keeps its slot.

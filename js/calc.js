@@ -3,8 +3,9 @@
 (function (root) {
   "use strict";
 
-  const TYPES = ["current", "savings", "investment", "crypto", "long_term", "loan", "home", "card"];
-  const ASSET_TYPES = ["current", "savings", "investment", "crypto", "long_term", "home"];
+  // long_term is shown as "Pension"; study_fund is Keren Hishtalmut.
+  const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card"];
+  const ASSET_TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "home"];
   const CURRENCIES = ["ILS", "USD", "EUR"];
   const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   // A change is "large" when it is over 25% AND over this many ILS (converted), so small accounts don't trip it.

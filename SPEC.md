@@ -66,7 +66,7 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 8. Reachable money: rejected including savings or investments. Final: current accounts only. Instant-access savings products are type savings.
 9. Headline: rejected full net worth as the headline. Final: reachable money on top, long-term total beneath.
 10. Investments and crypto: split by holding is postponed. Final: one total per account for now; keep the Holdings tab and keep the code ready for the split. Crypto is its own type and is never split by coin.
-11. Pension, provident and study funds are one type: long_term.
+11. Pension, provident and study funds are one type: long_term. *(Revised after Stage 4, see change 13: Keren Hishtalmut, a study fund, is its own type `study_fund`; `long_term` is shown as "Pension".)*
 12. Home: an asset in the long-term total, as a manual estimate updated once a year. Never part of reachable money.
 13. Loans: remaining balance plus monthly payment. *(Revised after Stage 4, see change 8: a first payment month, a payment history and the original amount were added. Still no end dates or amortisation schedules.)*
 14. Exchange-rate effect: *(revised after Stage 4, see "Changes agreed after the plan" 2)* changes exclude currency movement. Comparisons convert both months at the same rate, so only real changes in value show; the exchange-rate effect is not shown separately.
@@ -154,6 +154,8 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 11. **Passive income KPI** (requested after change 9). On the Spending top card, when there is fixed income: **Passive income covers X% of spending**, for the selected month and for the year so far (January up to the selected month). Coverage = my fixed income ÷ my spending, where spending = cards + fixed payments + loan payments, all at the personal share. Each figure has a bar. A note warns when card totals are missing for the month, since that makes the share look higher.
 
 12. **One-month exceptions for fixed payments and income** (requested after change 11). A Fixed row with `one_month` = `yes` sets the amount for its `from_month` only. The regular amount history is unchanged and applies again the next month, and 0 means nothing that month. Set it by tapping a fixed payment in the Spending month list (for that month), or from Manage → payment → "One month only" (any month, including future ones). Exceptions are listed there with Delete. Editing a payment's details updates its exception rows too. Exceptions are marked "this month only" in the Spending list. They don't apply to loan payment history.
+
+13. **Pension and Keren Hishtalmut types** (requested after change 12). New account type `study_fund`, shown as "Keren Hishtalmut". The existing `long_term` type is now shown as "Pension" (provident funds stay under it). Both are assets in the long-term total and never in reachable money. Long-term total = current + savings + investment + crypto + long_term + study_fund + home − loan. Each has its own card in the Long-term view and its own colour in the Trends stack: study_fund is violet `#9085e9`, and the 8-colour set still passes the palette validator against the panel colour. Bulk add accepts `pension` and `keren_hishtalmut` (also `hishtalmut`, `keren`) as well as the stored names.
 
 ## How to work
 
