@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.02-12";
+  const APP_VERSION = "2026.10.02-13";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "loan", "home", "card"];
@@ -15,7 +15,7 @@
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const JOINT = "Joint";
   // Fields that only apply to some account types.
-  const ONLY_FOR = { update_month: ["home"], linked_account: ["card"], monthly_payment: ["loan"] };
+  const ONLY_FOR = { update_month: ["home"], linked_account: ["card"], monthly_payment: ["loan"], loan_start: ["loan"], original_amount: ["loan"] };
   const BULK_COLUMNS = ["id", "nickname", "institution", "country", "currency", "owner", "type", "updater", "update_day", "linked_account"];
 
   const LS = {
@@ -698,13 +698,29 @@
 
   // ---------- Spending: cards, fixed payments and loan payments ----------
 
-  // Loan payments that apply in a month: active loans with a monthly_payment, from their first balance on.
+  // Fixed rows that are ordinary payments (not a loan's payment history).
+  const plainFixed = () => (state.fixed || []).filter((r) => !norm(r.loan_id));
+  // A loan's payment history: Fixed rows with loan_id = the account id (one series), or null.
+  const loanSeries = (id) => Calc.fixedSeries((state.fixed || []).filter((r) => norm(r.loan_id) === norm(id)))[0] || null;
+  const loanStart = (a, idx) => Calc.normMonth(a.loan_start) || idx.firstMonth.get(norm(a.id)) || Calc.currentMonth();
+
+  // The loan's monthly payment in a month, or null: from its first payment month; for a closed
+  // (inactive) loan only up to its last balance. The amount comes from the payment history when
+  // there is one (the first recorded amount also covers earlier months), else from monthly_payment.
+  function loanPayment(a, month, idx) {
+    if (month < loanStart(a, idx)) return null;
+    if (!isActive(a)) { const last = Calc.latestSnapshot(idx, a.id); if (!last || month > last.month) return null; }
+    const s = loanSeries(a.id);
+    const v = s ? Calc.parseAmount((s.versions.filter((x) => x.from <= month).pop() || s.versions[0]).row.amount)
+      : Calc.parseAmount(a.monthly_payment);
+    return isFinite(v) && v > 0 ? v : null;
+  }
+
   function loanPaymentsFor(month, idx) {
-    return state.accounts.filter((a) => lower(a.type) === "loan" && isActive(a) && norm(a.monthly_payment) !== "")
-      .filter((a) => { const first = idx.firstMonth.get(norm(a.id)); return first ? first <= month : month >= Calc.currentMonth(); })
-      .map((a) => ({ id: a.id, name: norm(a.nickname) || a.id, amount: Calc.parseAmount(a.monthly_payment),
+    return state.accounts.filter((a) => lower(a.type) === "loan")
+      .map((a) => ({ id: a.id, name: norm(a.nickname) || a.id, amount: loanPayment(a, month, idx),
         currency: norm(a.currency).toUpperCase() || "ILS", owner: norm(a.owner), account: a }))
-      .filter((p) => isFinite(p.amount));
+      .filter((p) => p.amount != null);
   }
 
   function renderCards() {
@@ -722,8 +738,8 @@
       .map((s) => Calc.normMonth(s.month)).filter(Boolean))];
     // Months with fixed or loan payments: from the earliest start up to this month.
     const starts = [
-      ...Calc.fixedSeries(state.fixed || []).map((s) => s.versions[0].from),
-      ...loanPaymentsFor(nowM, idx).map((p) => idx.firstMonth.get(norm(p.id)) || nowM),
+      ...Calc.fixedSeries(plainFixed()).map((s) => s.versions[0].from),
+      ...loanPaymentsFor(nowM, idx).map((p) => loanStart(p.account, idx)),
     ].filter((m) => m && m <= nowM).sort();
     const fixedMonths = starts.length ? Calc.monthRange(starts[0], nowM) : [];
     const allMonths = [...new Set([...cardMonths, ...fixedMonths])].sort().reverse();
@@ -767,7 +783,7 @@
       return any ? sum : null;
     };
     const fixedItems = (m) => [
-      ...Calc.fixedForMonth(state.fixed || [], m).map((p) => ({ ...p, kind: "fixed" })),
+      ...Calc.fixedForMonth(plainFixed(), m).map((p) => ({ ...p, kind: "fixed" })),
       ...loanPaymentsFor(m, idx).map((p) => ({ ...p, kind: "loan" })),
     ];
     const fixedTotal = (m, household) => {
@@ -861,9 +877,9 @@
       cards.filter((a) => shareOf(a) > 0).sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname))).forEach((a) => items.push({
         name: norm(a.nickname) || a.id, values: yearMonths.map((m) => { const v = cardValue(a, m, true); return v == null ? null : v * shareOf(a); }),
       }));
-      Calc.fixedSeries(state.fixed || []).filter((sr) => shareOf(sr.head) > 0).forEach((sr) => items.push({
+      Calc.fixedSeries(plainFixed()).filter((sr) => shareOf(sr.head) > 0).forEach((sr) => items.push({
         name: norm(sr.head.name) || sr.id,
-        values: yearMonths.map((m) => { const p = Calc.fixedForMonth(state.fixed, m).find((x) => x.id === sr.id); const v = p ? conv(p.amount, p.currency, m) : null; return v == null ? null : v * shareOf(sr.head); }),
+        values: yearMonths.map((m) => { const p = Calc.fixedForMonth(plainFixed(), m).find((x) => x.id === sr.id); const v = p ? conv(p.amount, p.currency, m) : null; return v == null ? null : v * shareOf(sr.head); }),
       }));
       const loanIds = [...new Set(yearMonths.flatMap((m) => loanPaymentsFor(m, idx).map((p) => p.id)))];
       loanIds.map((id) => state.accounts.find((a) => a.id === id)).filter((a) => a && shareOf(a) > 0)
@@ -949,7 +965,7 @@
 
   function renderFixed() {
     const nowM = Calc.currentMonth();
-    const series = Calc.fixedSeries(state.fixed || []);
+    const series = Calc.fixedSeries(plainFixed());
     const current = series.filter((s) => !s.stop || s.stop >= nowM);
     const ended = series.filter((s) => s.stop && s.stop < nowM);
     const item = (s) => {
@@ -979,7 +995,7 @@
       </div>`;
     document.getElementById("fx-add").addEventListener("click", () => openFixedForm(null));
     $screen.querySelectorAll("[data-fixed]").forEach((b) => b.addEventListener("click", () => {
-      const s = Calc.fixedSeries(state.fixed || []).find((x) => x.id === b.dataset.fixed);
+      const s = Calc.fixedSeries(plainFixed()).find((x) => x.id === b.dataset.fixed);
       if (s) openFixedForm(s);
     }));
   }
@@ -1507,14 +1523,17 @@
       const last = b ? { month, snap: b.snap } : Calc.latestSnapshot(idx, a.id);
       const f = myShare(a);
       const remaining = last ? Calc.parseAmount(last.snap.amount) * f : null;
-      const pay = norm(a.monthly_payment) !== "" ? Calc.parseAmount(a.monthly_payment) * f : null;
+      const p0 = loanPayment(a, Calc.currentMonth(), idx);
+      const pay = p0 != null ? p0 * f : null;
+      const orig = Calc.parseAmount(a.original_amount);
+      const paidOff = last && isFinite(orig) && orig > 0 ? Math.max(0, Math.min(100, (1 - Calc.parseAmount(last.snap.amount) / orig) * 100)) : null;
       if (pay != null && isFinite(pay)) {
         const pc = Calc.convert(pay, own, cur, state.rates, Calc.currentMonth());
         if (pc == null) commitmentsKnown = false; else commitments += pc;
       }
       return `
         <li>
-          <div><div>${accountName(a)}</div><div class="muted small">${remaining != null ? `owed ${last.month !== month ? `(${Calc.monthLabel(last.month)})` : ""}` : "no balance yet"}${f === 0.5 ? " · your 50%" : ""}</div></div>
+          <div><div>${accountName(a)}</div><div class="muted small">${remaining != null ? `owed ${last.month !== month ? `(${Calc.monthLabel(last.month)})` : ""}` : "no balance yet"}${f === 0.5 ? " · your 50%" : ""}${paidOff != null ? ` · ${paidOff.toFixed(0)}% paid off` : ""}</div></div>
           <div class="acct-right">
             <div class="mono neg">${remaining != null && isFinite(remaining) ? "−" + esc(fmtMoney(remaining, own)) : "—"}</div>
             <div class="acct-orig mono">${pay != null && isFinite(pay) ? `${esc(fmtMoney(pay, own))} / month` : "no payment set"}</div>
@@ -1524,7 +1543,7 @@
     // Other fixed payments (rent, parking…) in force this month, at your share.
     const nowM = Calc.currentMonth();
     let fixedSum = 0;
-    const fixedNow = Calc.fixedForMonth(state.fixed || [], nowM).filter((p) => myShare(p) > 0);
+    const fixedNow = Calc.fixedForMonth(plainFixed(), nowM).filter((p) => myShare(p) > 0);
     fixedNow.forEach((p) => {
       const v = Calc.convert(p.amount * myShare(p), p.currency, cur, state.rates, nowM);
       if (v == null) commitmentsKnown = false; else fixedSum += v;
@@ -2269,11 +2288,12 @@
           <div class="mid-number ${type === "loan" ? "neg" : ""}">${info ? `${type === "loan" ? "−" : ""}${esc(fmtMoney(info.amount, own, true))}` : "—"}</div>
           ${info && own !== state.displayCur && info.converted != null ? `<div class="muted mono small">≈ ${esc(fmtMoney(info.converted, state.displayCur))}</div>` : ""}
           ${info && info.delta ? `<div class="mono small ${toneOf(type === "loan" ? -info.delta.amount : info.delta.amount)}">${fmtSigned(info.delta.amount, own)} ${fmtPct(info.delta.pct)} vs ${Calc.monthLabel(Calc.shiftMonth(info.month, -1))}</div>` : ""}
-          ${type === "loan" && norm(a.monthly_payment) !== "" ? `<div class="muted small">Monthly payment: <span class="mono">${esc(fmtMoney(Calc.parseAmount(a.monthly_payment), own))}</span></div>` : ""}
+          ${type === "loan" ? loanSummaryHtml(a, idx, info, own) : ""}
           ${type === "card" ? `<div class="muted small">Paid from: ${linked ? accountName(linked) : "not set"}</div>` : ""}
           <div class="muted small">${esc(a.owner)} · updated by ${esc(a.updater)}${norm(a.update_day) !== "" ? ` · due day ${esc(a.update_day)}` : ""}${type === "home" && a.update_month ? ` of ${MONTHS[Number(a.update_month) - 1] || ""}` : ""}${isActive(a) ? "" : " · inactive"}</div>
         </div>
         ${chart ? `<div class="card tight">${chart}</div>` : ""}
+        ${type === "loan" ? loanHistoryHtml(a, idx, own) : ""}
         <div class="row">
           <button class="btn primary" id="ad-add" style="flex:1">Add balance</button>
           <button class="btn" id="ad-edit" style="flex:1">Edit account</button>
@@ -2298,6 +2318,7 @@
         <p class="err-text" id="ad-err"></p>
       </div>`);
     Charts.bind($sheetBody);
+    if (type === "loan") bindLoanHistory(a, idx);
     document.getElementById("ad-edit").addEventListener("click", () => openAccountForm(a));
     document.getElementById("ad-add").addEventListener("click", () => {
       state.updateMode = "manual";
@@ -2320,6 +2341,118 @@
         refreshBehindSheet();
       } catch (e) {
         document.getElementById("ad-err").textContent = friendlyError(e);
+        setBusy(b, false);
+      }
+    }));
+  }
+
+  // ---------- Loan: first payment month, paid off, payment history ----------
+
+  function loanSummaryHtml(a, idx, info, own) {
+    const nowPay = loanPayment(a, Calc.currentMonth(), idx);
+    const orig = Calc.parseAmount(a.original_amount);
+    const paid = info && isFinite(orig) && orig > 0 ? orig - info.amount : null;
+    return `
+      <div class="muted small">Monthly payment: <span class="mono">${nowPay != null ? esc(fmtMoney(nowPay, own)) : "not set"}</span>
+        · payments from <span class="mono">${esc(Calc.monthLabel(loanStart(a, idx), true))}</span>${Calc.normMonth(a.loan_start) ? "" : " (set the first payment month in Edit account)"}</div>
+      ${paid != null ? `<div class="stack" style="gap:6px">
+        <div class="spread small"><span class="muted">Paid off ${esc(fmtMoney(Math.max(0, paid), own))} of ${esc(fmtMoney(orig, own))}</span>
+          <span class="mono">${Math.max(0, Math.min(100, (paid / orig) * 100)).toFixed(0)}%</span></div>
+        <div class="bar"><span style="width:${Math.max(0, Math.min(100, (paid / orig) * 100)).toFixed(1)}%"></span></div></div>` : ""}`;
+  }
+
+  function loanHistoryHtml(a, idx, own) {
+    const sr = loanSeries(a.id);
+    const versions = sr ? sr.versions.slice().reverse() : [];
+    return `
+      <div class="card stack">
+        <div class="label">Payment history</div>
+        ${versions.length ? `<ul class="plain-list">${versions.map((v, i) => `
+          <li><span class="mono">${i === versions.length - 1 ? `From ${Calc.monthLabel(loanStart(a, idx), true)}` : `From ${Calc.monthLabel(v.from, true)}`}</span>
+            <span class="row"><span class="mono">${esc(fmtMoney(Calc.parseAmount(v.row.amount), own, true))}</span>
+            ${versions.length > 1 ? `<button type="button" class="btn small danger" data-lp-del="${esc(v.from)}">Delete</button>` : ""}</span></li>`).join("")}</ul>`
+          : `<p class="muted small">${norm(a.monthly_payment) !== "" ? `${esc(fmtMoney(Calc.parseAmount(a.monthly_payment), own, true))} every month from ${esc(Calc.monthLabel(loanStart(a, idx), true))}.` : "No monthly payment set yet."}</p>`}
+        <p class="muted small">When the payment changes, enter the new amount and the first month it applies. Earlier months keep the old amount.</p>
+        <div class="field-row">
+          <div class="field"><label class="label" for="lp-amount">New payment (${esc(own)})</label><input id="lp-amount" type="text" inputmode="decimal" placeholder="4,500"></div>
+          <div class="field"><label class="label" for="lp-from">From month</label><input id="lp-from" type="month" value="${Calc.currentMonth()}"></div>
+        </div>
+        <p class="err-text" id="lp-err"></p>
+        <button type="button" class="btn block" id="lp-save">Change the payment</button>
+      </div>`;
+  }
+
+  // Keeps the account's monthly_payment equal to the payment in force this month.
+  async function syncLoanPayment(a) {
+    await loadFixed();
+    const sr = loanSeries(a.id);
+    if (!sr) return;
+    const nowM = Calc.currentMonth();
+    const cur = Calc.parseAmount((sr.versions.filter((x) => x.from <= nowM).pop() || sr.versions[0]).row.amount);
+    if (isFinite(cur) && Calc.parseAmount(a.monthly_payment) !== cur) {
+      await Sheets.updateRow("Accounts", "id", a.id, { monthly_payment: cur });
+      await reloadAccounts();
+    }
+  }
+
+  function bindLoanHistory(a, idx) {
+    const $err = () => document.getElementById("lp-err");
+    const refresh = (msg) => {
+      toast(msg);
+      const fresh = state.accounts.find((x) => x.id === a.id) || a;
+      openAccountDetail(fresh);
+      refreshBehindSheet();
+    };
+    document.getElementById("lp-save").addEventListener("click", async (e) => {
+      const amount = Calc.parseAmount(document.getElementById("lp-amount").value);
+      const from = Calc.normMonth(document.getElementById("lp-from").value);
+      if (!isFinite(amount) || amount <= 0) { $err().textContent = "Enter the new monthly payment."; return; }
+      if (!from) { $err().textContent = "Choose the month it starts."; return; }
+      const btn = e.target;
+      setBusy(btn, true, "Saving…");
+      try {
+        await guarded(async () => {
+          await loadFixed();
+          const own = norm(a.currency).toUpperCase() || "ILS";
+          const base = { id: `loan-${a.id}`, name: norm(a.nickname) || a.id, currency: own, owner: norm(a.owner), paid_from: "", day: "", to_month: "", notes: "", loan_id: a.id };
+          const sr = loanSeries(a.id);
+          const rows = [];
+          if (!sr) {
+            // First change: keep the old payment for the months before it, from the first payment month.
+            const start = loanStart(a, Calc.indexSnapshots(state.snapshots));
+            const old = Calc.parseAmount(a.monthly_payment);
+            if (isFinite(old) && old > 0 && start < from) rows.push({ ...base, amount: old, from_month: start });
+            rows.push({ ...base, amount, from_month: from });
+          } else {
+            const same = sr.versions.find((v) => v.from === from);
+            if (same) await Sheets.setCells("Fixed", (await Sheets.readTab("Fixed")).header, [{ row: same.row._row, field: "amount", value: amount }], "RAW");
+            else rows.push({ ...base, amount, from_month: from });
+          }
+          if (rows.length) await Sheets.appendRows("Fixed", rows);
+          await syncLoanPayment(a);
+        });
+        refresh(`Payment ${fmtMoney(amount, norm(a.currency).toUpperCase() || "ILS")} from ${Calc.monthLabel(from, true)}`);
+      } catch (ex) {
+        $err().textContent = friendlyError(ex);
+        setBusy(btn, false);
+      }
+    });
+    $sheetBody.querySelectorAll("[data-lp-del]").forEach((b) => b.addEventListener("click", async () => {
+      const from = b.dataset.lpDel;
+      if (!confirm(`Delete the payment that starts in ${Calc.monthLabel(from, true)}?`)) return;
+      setBusy(b, true, "…");
+      try {
+        await guarded(async () => {
+          await loadFixed();
+          const sr = loanSeries(a.id);
+          const v = sr && sr.versions.find((x) => x.from === from);
+          if (!v || sr.versions.length < 2) throw new Error("That payment changed in the sheet meanwhile. Please look again.");
+          await Sheets.deleteRows("Fixed", [v.row._row]);
+          await syncLoanPayment(a);
+        });
+        refresh("Payment removed");
+      } catch (ex) {
+        $err().textContent = friendlyError(ex);
         setBusy(b, false);
       }
     }));
@@ -2456,7 +2589,14 @@
           <select id="af-linked">${options(linkable.map((x) => [x.id, `${x.nickname || x.id} (${x.id})`]), a.linked_account, "Not set")}</select>
           <span class="hint">The account that pays this card. For display only.</span></div>
         <div class="field" ${showIf("monthly_payment")}><label class="label" for="af-payment">Monthly payment</label>
-          <input id="af-payment" type="number" inputmode="decimal" min="0" step="any" value="${esc(a.monthly_payment)}" placeholder="0"></div>
+          <input id="af-payment" type="number" inputmode="decimal" min="0" step="any" value="${esc(a.monthly_payment)}" placeholder="0" ${!isNew && loanSeries(a.id) ? "readonly" : ""}>
+          ${!isNew && loanSeries(a.id) ? `<span class="hint">This loan has a payment history. Change the payment from the loan's page (tap the loan → Change the payment).</span>` : ""}</div>
+        <div class="field-row" ${showIf("loan_start")}>
+          <div class="field"><label class="label" for="af-loanstart">First payment month</label>
+            <input id="af-loanstart" type="month" value="${esc(Calc.normMonth(a.loan_start) || "")}"></div>
+          <div class="field"><label class="label" for="af-orig">Original loan amount</label>
+            <input id="af-orig" type="number" inputmode="decimal" min="0" step="any" value="${esc(a.original_amount)}" placeholder="Optional"></div>
+        </div>
         <div class="field"><label class="label" for="af-notes">Notes</label>
           <input id="af-notes" value="${esc(a.notes)}" autocomplete="off" placeholder="Optional"></div>
         <p class="err-text" id="af-err"></p>
@@ -2505,6 +2645,8 @@
         update_month: ONLY_FOR.update_month.includes(t) && v("af-month") ? Number(v("af-month")) : "",
         linked_account: ONLY_FOR.linked_account.includes(t) ? v("af-linked") : "",
         monthly_payment: ONLY_FOR.monthly_payment.includes(t) && v("af-payment") !== "" ? Number(v("af-payment")) : "",
+        loan_start: ONLY_FOR.loan_start.includes(t) ? (Calc.normMonth(v("af-loanstart")) || "") : "",
+        original_amount: ONLY_FOR.original_amount.includes(t) && v("af-orig") !== "" ? Number(v("af-orig")) : "",
         notes: v("af-notes"),
       };
       if (isNew) obj.active = true;
@@ -2519,6 +2661,8 @@
       else if (!Number.isInteger(obj.update_day) || obj.update_day < 1 || obj.update_day > 31) err = "Due day must be a whole number from 1 to 31.";
       else if (t === "home" && !obj.update_month) err = "Choose the month a home value is due.";
       else if (t === "loan" && obj.monthly_payment !== "" && !(obj.monthly_payment >= 0)) err = "Monthly payment must be a positive number.";
+      else if (t === "loan" && obj.original_amount !== "" && !(obj.original_amount > 0)) err = "Original loan amount must be a positive number.";
+      else if (t === "loan" && obj.loan_start && obj.loan_start > Calc.currentMonth()) err = "The first payment month can't be in the future.";
       $err.textContent = err;
       if (err) return;
 

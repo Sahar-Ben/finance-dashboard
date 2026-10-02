@@ -7,7 +7,8 @@
 
   const SCHEMA = {
     Accounts: ["id", "nickname", "institution", "country", "currency", "owner", "type", "updater",
-      "update_day", "update_month", "linked_account", "monthly_payment", "active", "notes"],
+      "update_day", "update_month", "linked_account", "monthly_payment", "active", "notes",
+      "loan_start", "original_amount"],
     Snapshots: ["id", "month", "account_id", "amount", "currency", "as_of_date", "entered_by", "entered_at", "source"],
     Holdings: ["month", "account_id", "holding", "amount", "currency"],
     Goals: ["id", "name", "target_amount", "currency", "account_ids", "active"],
@@ -15,7 +16,8 @@
     Settings: ["key", "value"],
     // Fixed monthly payments outside the cards (rent, parking). One row per version: a new row with a
     // later from_month records an amount change; to_month (on any row) ends the payment.
-    Fixed: ["id", "name", "amount", "currency", "owner", "paid_from", "day", "from_month", "to_month", "notes"],
+    // Rows with loan_id hold a loan's monthly-payment history instead of a separate payment.
+    Fixed: ["id", "name", "amount", "currency", "owner", "paid_from", "day", "from_month", "to_month", "notes", "loan_id"],
   };
 
   class SheetsError extends Error {

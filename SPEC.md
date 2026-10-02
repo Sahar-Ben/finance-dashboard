@@ -24,13 +24,13 @@ Create these tabs with these exact headers if they are missing; never overwrite 
 
 | Tab | Headers |
 |---|---|
-| Accounts | id, nickname, institution, country, currency, owner, type, updater, update_day, update_month, linked_account, monthly_payment, active, notes |
+| Accounts | id, nickname, institution, country, currency, owner, type, updater, update_day, update_month, linked_account, monthly_payment, active, notes, loan_start, original_amount *(last two added after Stage 4, see change 8)* |
 | Snapshots | id, month, account_id, amount, currency, as_of_date, entered_by, entered_at, source |
 | Holdings | month, account_id, holding, amount, currency |
 | Goals | id, name, target_amount, currency, account_ids, active |
 | Rates | month, usd_ils, eur_ils |
 | Settings | key, value |
-| Fixed | id, name, amount, currency, owner, paid_from, day, from_month, to_month, notes *(added after Stage 4, see change 6)* |
+| Fixed | id, name, amount, currency, owner, paid_from, day, from_month, to_month, notes, loan_id *(added after Stage 4, see changes 6 and 8)* |
 
 Rules:
 
@@ -68,7 +68,7 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 10. Investments and crypto: split by holding is postponed. Final: one total per account for now; keep the Holdings tab and keep the code ready for the split. Crypto is its own type and is never split by coin.
 11. Pension, provident and study funds are one type: long_term.
 12. Home: an asset in the long-term total, as a manual estimate updated once a year. Never part of reachable money.
-13. Loans: remaining balance plus monthly payment only. No end dates or schedules.
+13. Loans: remaining balance plus monthly payment. *(Revised after Stage 4, see change 8: a first payment month, a payment history and the original amount were added. Still no end dates or amortisation schedules.)*
 14. Exchange-rate effect: *(revised after Stage 4, see "Changes agreed after the plan" 2)* changes exclude currency movement. Comparisons convert both months at the same rate, so only real changes in value show; the exchange-rate effect is not shown separately.
 15. Per-person view: rejected splitting joint accounts 50/50. Final: three groups, the two people and Joint. Everything is visible to both users; no private accounts.
 16. Joint accounts are always updated by one person, set in the updater field.
@@ -144,6 +144,8 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
    - None of this changes reachable money or the long-term total; that money already shows when it leaves the bank accounts. It does not conflict with decision note 2: these are a few fixed amounts, not transactions.
 
 7. **Spending chart: Summary / Detail** (requested after change 6). A switch above the Spending chart, remembered on the device (`fd.spendDetail`). **Summary** stacks cards against fixed payments. **Detail** stacks one series per card, per fixed payment and per loan payment, all at the personal share. Order is fixed (cards, then fixed payments, then loans, each by name) so an item keeps its colour. Colours come from the validated categorical palette (`Charts.SERIES_COLORS`). With more than eight items, the smallest by year total fold into "Other". Tapping a month lists each item's amount. The chart opens on the selected month.
+
+8. **Loan details** (requested after change 6). For a loan (type loan), the account form adds **First payment month** (`loan_start`) and **Original loan amount** (`original_amount`). The monthly payment counts in Spending and the Overview from `loan_start` (or, if empty, from the loan's first balance month). For a deactivated loan it counts only up to its last balance. **Payment history:** on the loan's detail screen, "Change the payment" records a new amount from a chosen month as a row in the Fixed tab with `loan_id` = the account id (id `loan-<account id>`). The first change also records the old payment from the first payment month. Earlier months keep the old amount, and the earliest recorded amount also covers months before it. The account's `monthly_payment` is kept equal to the payment in force this month, and is read-only in the form once a history exists. Loan rows never appear in the Fixed payments list. When the original amount is set, the detail screen and the Overview show **paid off** = original − latest remaining balance, as an amount and percentage.
 
 ## How to work
 
