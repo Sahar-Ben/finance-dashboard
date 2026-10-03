@@ -3,10 +3,16 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.03-8";
+  const APP_VERSION = "2026.10.03-9";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
+  // The bank account a card, salary or loan payment goes through; used to explain each account's change.
+  const LINK_HINT = {
+    card: "The account that pays this card.",
+    salary: "The account your salary arrives in.",
+    loan: "The account the monthly payment leaves from.",
+  };
   const isFlow = (a) => Calc.FLOW_TYPES.includes(lower(a.type)); // card or salary: monthly amounts, not balances
   const TYPE_LABEL = {
     current: "Bank", savings: "Savings", investment: "Investment", crypto: "Crypto",
@@ -16,7 +22,7 @@
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const JOINT = "Joint";
   // Fields that only apply to some account types.
-  const ONLY_FOR = { update_month: ["home"], linked_account: ["card"], monthly_payment: ["loan"], loan_start: ["loan"], original_amount: ["loan"] };
+  const ONLY_FOR = { update_month: ["home"], linked_account: ["card", "salary", "loan"], monthly_payment: ["loan"], loan_start: ["loan"], original_amount: ["loan"] };
   const BULK_COLUMNS = ["id", "nickname", "institution", "country", "currency", "owner", "type", "updater", "update_day", "linked_account"];
 
   const LS = {
@@ -1182,6 +1188,73 @@
     const totalSavedM = cashM != null ? cashM - loanM.sum : null;
     const totalSeries = yearMonths.map((m) => { const c = cashChange(m); return c == null ? null : c - newLoanMoney(m).sum; });
     const signed = (v) => `${v >= 0 ? "" : "−"}${fmtMoney(Math.abs(v), cur)}`;
+
+    // Why is it unexplained? Per account (full amounts): actual change vs the flows linked to it.
+    function accountBreakdown(m) {
+      const pm = Calc.shiftMonth(m, -1);
+      const accts = cashAccounts.filter((a) => myShare(a) > 0 && (isActive(a) || idx.get(norm(a.id), m)));
+      const conv = (v, c) => (isFinite(v) ? Calc.convert(v, c, cur, state.rates, m) : null);
+      const flows = new Map(accts.map((a) => [a.id, []]));
+      const unlinked = [];
+      const add = (acctId, name, v) => {
+        if (v == null || Math.abs(v) < 0.5) return;
+        if (acctId && flows.has(acctId)) flows.get(acctId).push({ name, v });
+        else unlinked.push({ name, v });
+      };
+      const own = (a, snap) => norm(snap.currency).toUpperCase() || norm(a.currency).toUpperCase();
+      state.accounts.forEach((a) => {
+        const t = lower(a.type);
+        if (t !== "salary" && t !== "card") return;
+        if (!myShare(a)) return;
+        const sn = idx.get(norm(a.id), m);
+        if (!sn) return;
+        const v = conv(Calc.parseAmount(sn.amount), own(a, sn));
+        add(norm(a.linked_account), norm(a.nickname) || a.id, t === "salary" ? v : v == null ? null : -v);
+      });
+      Calc.fixedForMonth(plainFixed(), m).filter((p) => myShare(p) > 0).forEach((p) => {
+        const v = conv(p.amount, p.currency);
+        add(p.paid_from, p.name, p.income ? v : v == null ? null : -v);
+      });
+      state.accounts.filter((a) => lower(a.type) === "loan" && myShare(a) > 0).forEach((a) => {
+        const pay = loanPayment(a, m, idx);
+        if (pay != null) add(norm(a.linked_account), `${norm(a.nickname) || a.id} payment`, -conv(pay, norm(a.currency).toUpperCase() || "ILS"));
+        // New loan money is paid into the linked account.
+        const now = idx.get(norm(a.id), m), prev = idx.get(norm(a.id), pm);
+        if (now && (prev || idx.firstMonth.get(norm(a.id)) === m)) {
+          const up = Calc.parseAmount(now.amount) - (prev ? Calc.parseAmount(prev.amount) : 0);
+          if (up > 0) add(norm(a.linked_account), `${norm(a.nickname) || a.id} (new loan money)`, conv(up, own(a, now)));
+        }
+      });
+      explainedFor(m, cur).filter((x) => x.cat === "own_transfer" && x.gross != null).forEach((x) => {
+        add(norm(x.row.from_account), `Transfer out (explained)`, -x.gross);
+        add(norm(x.row.to_account), `Transfer in (explained)`, x.gross);
+      });
+      const rows = accts.map((a) => {
+        const sNow = idx.get(norm(a.id), m), sPrev = idx.get(norm(a.id), pm);
+        if (!sNow || !sPrev) return { a, missing: true };
+        const actual = conv(Calc.parseAmount(sNow.amount), own(a, sNow)) - conv(Calc.parseAmount(sPrev.amount), own(a, sPrev));
+        const items = flows.get(a.id);
+        const expected = items.reduce((t, x) => t + x.v, 0);
+        return { a, actual, expected, items, diff: actual - expected };
+      });
+      return { rows, unlinked };
+    }
+    const breakdownHtml = (m) => {
+      const b = accountBreakdown(m);
+      const amt = (v) => `<span class="nowrap">${esc(fmtSigned(v, cur))}</span>`;
+      const line = (x) => `${esc(x.name)} ${amt(x.v)}`;
+      return `
+        <details class="calc">
+          <summary class="link-btn">Why? Show it per account</summary>
+          <p class="muted small" style="margin:6px 0">Each account's real change against what you entered for it (full amounts, not your 50% share). The difference is where the unexplained money is.</p>
+          <ul class="plain-list loan-list">${b.rows.map((r) => r.missing ? `<li><span>${accountName(r.a)}</span><span class="small warn-text">balance missing</span></li>` : `
+            <li><div><div>${accountName(r.a)}${myShare(r.a) === 0.5 ? ` <span class="muted small">(joint)</span>` : ""}</div>
+              <div class="muted small">changed ${amt(r.actual)} · expected ${amt(r.expected)}${r.items.length ? ` (${r.items.map(line).join(", ")})` : " (nothing linked)"}</div></div>
+              <div class="acct-right"><div class="mono ${Math.abs(r.diff) < 1 ? "muted" : r.diff > 0 ? "pos" : "neg"}">${Math.abs(r.diff) < 1 ? "✓" : esc(fmtSigned(r.diff, cur))}</div>
+              <div class="acct-orig">${Math.abs(r.diff) < 1 ? "matches" : "unexplained"}</div></div></li>`).join("")}</ul>
+          ${b.unlinked.length ? `<p class="muted small">Not linked to any account yet: ${b.unlinked.map(line).join(", ")}. Set "Paid from" / "Paid into" (Accounts → Edit account, or the fixed payment's bank account) to see where they belong.</p>` : ""}
+        </details>`;
+    };
     const savingsHtml = !salaries.length ? `
       <div class="card stack">
         <div class="label">Savings</div>
@@ -1226,6 +1299,7 @@
         </ul>
         ${otherM != null ? `<div class="spread commit"><span>${Math.abs(otherM) < 1 ? "Everything explained" : otherM >= 0 ? "Unexplained money in" : "Unexplained money out"}</span><span class="mono ${Math.abs(otherM) < 1 ? "muted" : otherM >= 0 ? "pos" : "neg"}">${Math.abs(otherM) < 1 ? "✓" : `${otherM >= 0 ? "+" : "−"}${esc(fmtMoney(Math.abs(otherM), cur))}`}</span></div>
         ${Math.abs(otherM) >= 1 ? `<div class="muted small">${otherM >= 0 ? "e.g. extra income, friends paying you back, transfers in, investment gains." : "e.g. cash, Bit, transfers out, investment losses."} Tell the app what it was to make your savings exact.</div>` : ""}
+        ${Math.abs(otherM) >= 1 ? breakdownHtml(month) : ""}
         <button type="button" class="btn block" id="sv-explain">${explM.length ? "Explain / edit" : "Explain this"}</button>` : ""}`}
       </div>`;
     const SPEND_COLORS = { cards: Charts.TYPE_COLORS.current, fixed: Charts.TYPE_COLORS.savings };
@@ -3064,9 +3138,9 @@
           <div class="field" ${showIf("update_month")}><label class="label" for="af-month">Due month</label>
             <select id="af-month">${options(MONTHS.map((m, i) => [i + 1, m]), a.update_month, "Choose…")}</select></div>
         </div>
-        <div class="field" ${showIf("linked_account")}><label class="label" for="af-linked">Paid from</label>
+        <div class="field" ${showIf("linked_account")}><label class="label" for="af-linked" id="af-linked-label">${type === "salary" ? "Paid into" : "Paid from"}</label>
           <select id="af-linked">${options(linkable.map((x) => [x.id, `${x.nickname || x.id} (${x.id})`]), a.linked_account, "Not set")}</select>
-          <span class="hint">The account that pays this card. For display only.</span></div>
+          <span class="hint" id="af-linked-hint">${LINK_HINT[type] || ""}</span></div>
         <div class="field" ${showIf("monthly_payment")}><label class="label" for="af-payment">Monthly payment</label>
           <input id="af-payment" type="number" inputmode="decimal" min="0" step="any" value="${esc(a.monthly_payment)}" placeholder="0" ${!isNew && loanSeries(a.id) ? "readonly" : ""}>
           ${!isNew && loanSeries(a.id) ? `<span class="hint">This loan has a payment history. Change the payment from the loan's page (tap the loan → Change the payment).</span>` : ""}</div>
@@ -3095,6 +3169,8 @@
       form.querySelectorAll("[data-only]").forEach((el) => {
         el.hidden = !el.dataset.only.split(" ").includes($type.value);
       });
+      document.getElementById("af-linked-label").textContent = $type.value === "salary" ? "Paid into" : "Paid from";
+      document.getElementById("af-linked-hint").textContent = LINK_HINT[$type.value] || "";
     });
     seg.addEventListener("click", (e) => {
       const b = e.target.closest("[data-cur]");
@@ -3262,7 +3338,7 @@
 
       const linked = lower(c.linked_account);
       if (linked) {
-        if (type !== "card") problems.push({ col: "linked_account", msg: "Only cards have a linked account." });
+        if (!["card", "salary", "loan"].includes(type)) problems.push({ col: "linked_account", msg: "Only cards, salaries and loans have a linked account." });
         else if (!linkTargets.has(linked)) problems.push({ col: "linked_account", msg: `Unknown account "${c.linked_account}".` });
       }
       if (type === "home") warnings.push("Home accounts also need a due month — set it in the form after adding.");
