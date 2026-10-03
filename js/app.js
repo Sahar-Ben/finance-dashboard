@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.03-4";
+  const APP_VERSION = "2026.10.03-5";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
@@ -987,6 +987,9 @@
     const cashM = cashChange(month);
     const loanM = newLoanMoney(month);
     const otherM = cashM != null && savedM != null ? cashM - loanM.sum - savedM : null;
+    // Total saved from all sources, worked out from balances alone (extra income, friends paying back included).
+    const totalSavedM = cashM != null ? cashM - loanM.sum : null;
+    const totalSeries = yearMonths.map((m) => { const c = cashChange(m); return c == null ? null : c - newLoanMoney(m).sum; });
     const signed = (v) => `${v >= 0 ? "" : "−"}${fmtMoney(Math.abs(v), cur)}`;
     const savingsHtml = !salaries.length ? `
       <div class="card stack">
@@ -994,10 +997,15 @@
         <p class="muted">To see how much you save each month, add a <strong>Salary</strong> account (Accounts → + Add → Type: Salary) and enter each month's net salary with Update, like a card total.</p>
       </div>` : `
       <div class="card stack">
-        <div class="label">Saved from income · ${Calc.monthLabel(month, true)}</div>
+        <div class="label">My savings · ${Calc.monthLabel(month, true)}</div>
         ${savedM == null ? `<p class="muted">No salary entered for ${Calc.monthLabel(month, true)} yet. Add it with Update to see what you saved.</p><a class="btn block" href="#update">Update</a>` : `
-        <div class="mid-number ${savedM >= 0 ? "pos" : "neg"}">${esc(signed(savedM))}</div>
-        <div class="muted small">${rateM != null ? `${rateM.toFixed(1)}% of income` : ""}${avgSaved != null ? ` · average ${esc(fmtMoney(avgSaved, cur))} / month in ${year}` : ""}</div>
+        <div class="kpi-grid">
+          <div><div class="mid-number ${savedM >= 0 ? "pos" : "neg"}">${esc(signed(savedM))}</div>
+            <div class="muted small">from salary & fixed income${rateM != null ? ` · ${rateM.toFixed(1)}% of it` : ""}</div></div>
+          <div><div class="mid-number ${totalSavedM == null ? "muted" : totalSavedM >= 0 ? "pos" : "neg"}">${totalSavedM == null ? "—" : esc(signed(totalSavedM))}</div>
+            <div class="muted small">total saved, all sources${totalSavedM == null ? " (needs all balances for this and last month)" : " (from balances)"}</div></div>
+        </div>
+        <div class="muted small">${avgSaved != null ? `Average from income ${esc(fmtMoney(avgSaved, cur))} / month in ${year}` : ""}</div>
         <ul class="plain-list">
           <li><span>Salary</span><span class="mono">${esc(fmtMoney(salM, cur))}</span></li>
           ${myIncomeM ? `<li><span>Fixed income</span><span class="mono">${esc(fmtMoney(myIncomeM, cur))}</span></li>` : ""}
@@ -1007,15 +1015,16 @@
           labels, fmtTick: fmtTickFor(cur), highlight: mi,
           series: [{ key: "saved", color: "#5BE3A7", values: savedSeries.map((v) => (v != null && v > 0 ? v : null)) }],
           negative: { color: Charts.TYPE_COLORS.loan, values: savedSeries.map((v) => (v != null && v < 0 ? -v : null)) },
-          tips: yearMonths.map((m, i) => `${Calc.monthLabel(m, true)} · ${savedSeries[i] == null ? "no salary entered" : `saved from income ${fmtSigned(savedSeries[i], cur)}`}`),
+          tips: yearMonths.map((m, i) => `${Calc.monthLabel(m, true)} · ${savedSeries[i] == null ? "no salary entered" : `saved from income ${fmtSigned(savedSeries[i], cur)}`}${totalSeries[i] != null ? ` · total saved ${fmtSigned(totalSeries[i], cur)}` : ""}`),
           ariaLabel: "Saved from income per month",
         }) : ""}
         <div class="label" style="margin-top:6px">Balance status · ${Calc.monthLabel(month, true)}</div>
         ${cashM == null ? `<div class="muted small">${Calc.monthLabel(Calc.shiftMonth(month, -1))} and ${Calc.monthLabel(month)} both need all bank, savings and investment balances to show how your balances moved.</div>` : `
         <ul class="plain-list">
           <li><span>Bank, savings & investments changed</span><span class="mono ${toneOf(cashM)}">${esc(fmtSigned(cashM, cur))}</span></li>
-          ${loanM.sum > 0 ? `<li><span>New loan money (borrowed, not saved)${loanM.items.length ? ` · ${loanM.items.join(", ")}` : ""}</span><span class="mono">−${esc(fmtMoney(loanM.sum, cur))}</span></li>` : ""}
-          ${savedM != null ? `<li><span>Less: saved from income</span><span class="mono">${esc(fmtSigned(-savedM, cur))}</span></li>` : ""}
+          ${loanM.sum > 0 ? `<li><span>Less: new loan money (borrowed, not saved)${loanM.items.length ? ` · ${loanM.items.join(", ")}` : ""}</span><span class="mono">−${esc(fmtMoney(loanM.sum, cur))}</span></li>` : ""}
+          <li class="sum"><span>= Total saved, all sources</span><span class="mono ${toneOf(totalSavedM)}">${esc(fmtSigned(totalSavedM, cur))}</span></li>
+          ${savedM != null ? `<li><span>Less: saved from salary & fixed income</span><span class="mono">${esc(fmtSigned(-savedM, cur))}</span></li>` : ""}
         </ul>
         ${otherM != null ? `<div class="spread commit"><span>${otherM >= 0 ? "Other money in" : "Other money out"}</span><span class="mono ${otherM >= 0 ? "pos" : "neg"}">${otherM >= 0 ? "+" : "−"}${esc(fmtMoney(Math.abs(otherM), cur))}</span></div>
         <div class="muted small">${otherM >= 0 ? "e.g. friends paying you back, transfers in, investment gains." : "e.g. cash, Bit, transfers out, investment losses."} Worked out from your balances; transfers between your own accounts cancel out.</div>` : ""}`}

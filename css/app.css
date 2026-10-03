@@ -312,6 +312,9 @@ a.link-card { color: inherit; text-decoration: none; }
 li.tap { cursor: pointer; }
 li.tap:active { opacity: 0.7; }
 
+.plain-list li > .mono, .spread > .mono { white-space: nowrap; }
+.plain-list li.sum { border-top: 1px solid var(--border); padding-top: 8px; font-weight: 500; }
+
 /* Banks */
 .nowrap { white-space: nowrap; }
 .bank-chg { text-align: right; flex: none; }
