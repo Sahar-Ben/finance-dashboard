@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.03-7";
+  const APP_VERSION = "2026.10.03-8";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
@@ -763,23 +763,38 @@
 
   // ---------- Explaining other money in/out ----------
 
-  // affects: true = changes "saved from income" (income, paid back, spending); false = neutral, only explained.
+  // affects: true = changes "saved from income"; false = neutral, only explains the gap.
+  // dir: "in" / "out" fixed sign, "both" = choose, "calc" = worked out (own transfers).
   const EXPL_CATS = {
     income: { label: "Extra income", dir: "in", affects: true },
-    refund: { label: "Paid back (friend's share)", dir: "in", affects: true },
+    own_transfer: { label: "Transfer between my accounts", dir: "calc", affects: false },
+    refund: { label: "Money from a friend for something on my card", short: "Paid back by a friend", dir: "in", affects: true },
     spending: { label: "Spending: cash / Bit / transfer", dir: "out", affects: true },
-    transfer: { label: "Transfer (not income or spending)", dir: "both", affects: false },
+    transfer: { label: "Transfer to/from someone else", dir: "both", affects: false },
     investment: { label: "Investment gain or loss", dir: "both", affects: false },
   };
+  const explLabel = (cat) => EXPL_CATS[cat].short || EXPL_CATS[cat].label;
+  const acctById = (id) => state.accounts.find((a) => norm(a.id) === norm(id));
 
-  // My explanations for a month, converted to the display currency: [{ row, cat, amount (signed) }].
+  // How one explanation reads in a list: transfers show their route, refunds their card.
+  function explText(x) {
+    const r = x.row;
+    if (x.cat === "own_transfer") {
+      const f = acctById(r.from_account), t = acctById(r.to_account);
+      return `${f ? accountName(f) : "?"} → ${t ? accountName(t) : "?"}`;
+    }
+    const c = r.card_id ? acctById(r.card_id) : null;
+    return `${esc(explLabel(x.cat))}${c ? ` · ${accountName(c)}` : ""}${norm(r.note) ? ` · ${esc(r.note)}` : ""}`;
+  }
+
+  // My explanations for a month, converted to the display currency: [{ row, cat, amount (signed), gross }].
   function explainedFor(month, cur) {
     const me = lower(state.me.name);
     return (state.explained || []).filter((r) => Calc.normMonth(r.month) === month && lower(r.owner) === me && EXPL_CATS[lower(r.category)])
       .map((r) => {
-        const a = Calc.parseAmount(r.amount);
-        const v = isFinite(a) ? Calc.convert(a, norm(r.currency).toUpperCase() || "ILS", cur, state.rates, month) : null;
-        return { row: r, cat: lower(r.category), amount: v };
+        const c = norm(r.currency).toUpperCase() || "ILS";
+        const conv = (v) => (isFinite(v) ? Calc.convert(v, c, cur, state.rates, month) : null);
+        return { row: r, cat: lower(r.category), amount: conv(Calc.parseAmount(r.amount)), gross: conv(Calc.parseAmount(r.gross)) };
       }).filter((x) => x.amount != null);
   }
   const explSum = (list, affects) => list.filter((x) => EXPL_CATS[x.cat].affects === affects).reduce((t, x) => t + x.amount, 0);
@@ -791,48 +806,77 @@
   function openExplain(month, unexplained) {
     const cur = state.displayCur;
     const list = explainedFor(month, cur);
+    const prevM = Calc.shiftMonth(month, -1);
+    const prevList = explainedFor(prevM, cur);
     const dirDefault = unexplained >= 0 ? "in" : "out";
+    // Accounts that hold money and count for me (own or joint), for transfers; my cards for refunds.
+    const moneyAccts = state.accounts.filter((a) => isActive(a) && ["current", "savings", "investment"].includes(lower(a.type)) && myShare(a) > 0)
+      .sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname)));
+    const myCards = state.accounts.filter((a) => isActive(a) && lower(a.type) === "card" && myShare(a) > 0);
+    const acctOpts = (sel) => moneyAccts.map((a) => `<option value="${esc(a.id)}" ${a.id === sel ? "selected" : ""}>${esc(norm(a.nickname) || a.id)}${myShare(a) === 0.5 ? " (joint)" : ""}</option>`).join("");
     openSheet(`
       <form id="ex-form" class="stack-lg" novalidate>
         <div class="spread"><div><div class="label">Explain · ${esc(Calc.monthLabel(month, true))}</div>
-          <h2>${unexplained >= 0 ? "Money came in" : "Money went out"}: ${esc(fmtMoney(Math.abs(unexplained), cur))}</h2></div>
+          <h2>${Math.abs(unexplained) < 1 ? "Everything explained" : `${unexplained >= 0 ? "Money came in" : "Money went out"}: ${esc(fmtMoney(Math.abs(unexplained), cur))}`}</h2></div>
           <button type="button" class="icon-btn" data-close aria-label="Close">✕</button></div>
-        <p class="muted">Worked out from your balances. Tell the app what it was; you can split it into several parts. Anything left stays "unexplained".</p>
+        <p class="muted">Worked out from your balances. Tell the app what it was; split it into as many parts as you like.</p>
         ${list.length ? `<ul class="plain-list">${list.map((x) => `
-          <li><span>${esc(EXPL_CATS[x.cat].label)}${norm(x.row.note) ? ` · ${esc(x.row.note)}` : ""}</span>
-            <span class="row"><span class="mono ${x.amount >= 0 ? "pos" : "neg"}">${esc(fmtSigned(x.amount, cur))}</span>
+          <li><span>${explText(x)}${x.cat === "own_transfer" && x.gross != null ? ` <span class="muted small">moved ${esc(fmtMoney(x.gross, cur))}</span>` : ""}</span>
+            <span class="row"><span class="mono ${x.amount > 0 ? "pos" : x.amount < 0 ? "neg" : "muted"}">${esc(fmtSigned(x.amount, cur))}</span>
             <button type="button" class="btn small danger" data-ex-del="${esc(x.row.id)}">Delete</button></span></li>`).join("")}</ul>` : ""}
+        ${!list.length && prevList.length ? `<button type="button" class="btn block" id="ex-copy">Copy ${Calc.monthLabel(prevM)}'s ${prevList.length} explanation${prevList.length > 1 ? "s" : ""}</button>` : ""}
         <div class="field"><label class="label" for="ex-cat">What was it?</label>
-          <select id="ex-cat">${Object.entries(EXPL_CATS).filter(([, c]) => c.dir === "both" || c.dir === dirDefault)
-            .map(([k, c]) => `<option value="${k}">${esc(c.label)}</option>`).join("")}
-            ${Object.entries(EXPL_CATS).filter(([, c]) => c.dir !== "both" && c.dir !== dirDefault)
-            .map(([k, c]) => `<option value="${k}">${esc(c.label)}</option>`).join("")}</select></div>
+          <select id="ex-cat">${Object.entries(EXPL_CATS).map(([k, c]) => `<option value="${k}">${esc(c.label)}</option>`).join("")}</select></div>
+        <div class="field-row" id="ex-route">
+          <div class="field"><label class="label" for="ex-from">From</label><select id="ex-from">${acctOpts(moneyAccts[0] && moneyAccts[0].id)}</select></div>
+          <div class="field"><label class="label" for="ex-to">To</label><select id="ex-to">${acctOpts(moneyAccts[1] && moneyAccts[1].id)}</select></div>
+        </div>
+        <div class="field" id="ex-card-field"><label class="label" for="ex-card">Paid on which card (optional)</label>
+          <select id="ex-card">${options(myCards.map((a) => [a.id, norm(a.nickname) || a.id]), "", "Not set")}</select></div>
         <div class="field" id="ex-dir-field"><span class="label">Direction</span>
           <div class="seg" id="ex-dir">
             <button type="button" data-dir="in" aria-pressed="${dirDefault === "in"}">IN (+)</button>
             <button type="button" data-dir="out" aria-pressed="${dirDefault === "out"}">OUT (−)</button>
           </div></div>
         <div class="field-row">
-          <div class="field"><label class="label" for="ex-amount">Amount (${esc(cur)})</label>
-            <input id="ex-amount" type="text" inputmode="decimal" value="${Math.round(Math.abs(unexplained))}"></div>
+          <div class="field"><label class="label" for="ex-amount" id="ex-amount-label">Amount (${esc(cur)})</label>
+            <input id="ex-amount" type="text" inputmode="decimal" value="${Math.abs(unexplained) >= 1 ? Math.round(Math.abs(unexplained)) : ""}"></div>
           <div class="field"><label class="label" for="ex-note">Note</label><input id="ex-note" autocomplete="off" placeholder="Optional"></div>
         </div>
+        <p class="muted small" id="ex-effect"></p>
         <p class="err-text" id="ex-err"></p>
         <button class="btn primary block" type="submit">Save</button>
       </form>`);
     const $cat = document.getElementById("ex-cat");
-    const syncDir = () => {
-      const c = EXPL_CATS[$cat.value];
+    const $amt = document.getElementById("ex-amount");
+    const $from = document.getElementById("ex-from");
+    const $to = document.getElementById("ex-to");
+    // Effect of moving X from one account to another on my share: X × (share of "to" − share of "from").
+    const transferEffect = (x) => x * (myShare(acctById($to.value) || {}) - myShare(acctById($from.value) || {}));
+    const sync = () => {
+      const k = $cat.value, c = EXPL_CATS[k];
+      document.getElementById("ex-route").hidden = k !== "own_transfer";
+      document.getElementById("ex-card-field").hidden = k !== "refund";
       document.getElementById("ex-dir-field").hidden = c.dir !== "both";
-      if (c.dir !== "both") document.querySelectorAll("#ex-dir button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.dir === c.dir)));
+      document.getElementById("ex-amount-label").textContent = `${k === "own_transfer" ? "Amount moved" : "Amount"} (${cur})`;
+      if (c.dir === "in" || c.dir === "out") document.querySelectorAll("#ex-dir button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.dir === c.dir)));
+      const x = Calc.parseAmount($amt.value);
+      document.getElementById("ex-effect").textContent = k === "own_transfer" && isFinite(x)
+        ? (Math.abs(transferEffect(x)) < 0.5 ? "Both accounts count fully for you, so this changes nothing in your totals; it just explains the move."
+          : `Your share changes by ${fmtSigned(transferEffect(x), cur)} (a joint account counts 50% for you).`) : "";
     };
-    $cat.addEventListener("change", syncDir);
-    syncDir();
+    [$cat, $from, $to].forEach((el) => el.addEventListener("change", sync));
+    $amt.addEventListener("input", sync);
+    // Pick the most likely category for the gap.
+    $cat.value = dirDefault === "in" ? "income" : "spending";
+    sync();
     document.getElementById("ex-dir").addEventListener("click", (e) => {
       const b = e.target.closest("[data-dir]");
       if (b) document.querySelectorAll("#ex-dir button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
     });
     const done = (msg) => { closeSheet(); toast(msg); route(); };
+    const err = (e) => { document.getElementById("ex-err").textContent = friendlyError(e); };
+    const base = () => ({ month, owner: state.me.name, currency: cur, entered_by: state.me.name, entered_at: new Date().toISOString() });
     $sheetBody.querySelectorAll("[data-ex-del]").forEach((b) => b.addEventListener("click", async () => {
       setBusy(b, true, "…");
       try {
@@ -843,26 +887,50 @@
           await loadExplained();
         });
         done("Removed");
-      } catch (e) { document.getElementById("ex-err").textContent = friendlyError(e); setBusy(b, false); }
+      } catch (e) { err(e); setBusy(b, false); }
     }));
+    const copy = document.getElementById("ex-copy");
+    if (copy) copy.addEventListener("click", async () => {
+      setBusy(copy, true, "Copying…");
+      try {
+        await guarded(async () => {
+          const stamp = Date.now().toString(36);
+          await Sheets.appendRows("Explained", prevList.map((x, i) => ({
+            ...base(), id: `x-${stamp}${i}`, category: x.cat, currency: norm(x.row.currency).toUpperCase() || "ILS",
+            amount: x.row.amount, gross: x.row.gross, note: x.row.note, from_account: x.row.from_account, to_account: x.row.to_account, card_id: x.row.card_id,
+          })));
+          await loadExplained();
+        });
+        toast(`Copied from ${Calc.monthLabel(prevM)}. Adjust the amounts if needed.`);
+        // Redraw so the remaining amount is recalculated, then reopen this screen.
+        closeSheet();
+        route();
+        const again = document.getElementById("sv-explain");
+        if (again) again.click();
+      } catch (e) { err(e); setBusy(copy, false); }
+    });
     document.getElementById("ex-form").addEventListener("submit", async (e) => {
       e.preventDefault();
-      const amt = Calc.parseAmount(document.getElementById("ex-amount").value);
-      if (!isFinite(amt) || amt <= 0) { document.getElementById("ex-err").textContent = "Enter the amount."; return; }
-      const dir = document.querySelector("#ex-dir [aria-pressed=\"true\"]").dataset.dir;
+      const k = $cat.value;
+      const x = Calc.parseAmount($amt.value);
+      if (!isFinite(x) || x <= 0) { document.getElementById("ex-err").textContent = "Enter the amount."; return; }
+      let row;
+      if (k === "own_transfer") {
+        if (!$from.value || !$to.value || $from.value === $to.value) { document.getElementById("ex-err").textContent = "Choose two different accounts."; return; }
+        row = { category: k, gross: x, amount: transferEffect(x), from_account: $from.value, to_account: $to.value };
+      } else {
+        const dir = document.querySelector('#ex-dir [aria-pressed="true"]').dataset.dir;
+        row = { category: k, amount: dir === "out" ? -x : x, card_id: k === "refund" ? document.getElementById("ex-card").value : "" };
+      }
       const btn = e.target.querySelector('[type="submit"]');
       setBusy(btn, true, "Saving…");
       try {
         await guarded(async () => {
-          await Sheets.appendRows("Explained", [{
-            id: `x-${Date.now().toString(36)}`, month, owner: state.me.name, category: $cat.value,
-            amount: dir === "out" ? -amt : amt, currency: cur, note: norm(document.getElementById("ex-note").value),
-            entered_by: state.me.name, entered_at: new Date().toISOString(),
-          }]);
+          await Sheets.appendRows("Explained", [{ ...base(), id: `x-${Date.now().toString(36)}`, note: norm(document.getElementById("ex-note").value), ...row }]);
           await loadExplained();
         });
         done("Saved");
-      } catch (ex) { document.getElementById("ex-err").textContent = friendlyError(ex); setBusy(btn, false); }
+      } catch (ex) { err(ex); setBusy(btn, false); }
     });
   }
 
@@ -1133,7 +1201,7 @@
           <li><span>Salary</span><span class="mono">${esc(fmtMoney(salM, cur))}</span></li>
           ${myIncomeM ? `<li><span>Fixed income</span><span class="mono">${esc(fmtMoney(myIncomeM, cur))}</span></li>` : ""}
           <li><span>Spending (cards, fixed, loans)</span><span class="mono">−${esc(fmtMoney(total || 0, cur))}</span></li>
-          ${explM.filter((x) => EXPL_CATS[x.cat].affects).map((x) => `<li><span>${esc(EXPL_CATS[x.cat].label.replace(/ \(.*\)$/, ""))}${norm(x.row.note) ? ` · ${esc(x.row.note)}` : ""}</span><span class="mono">${esc(fmtSigned(x.amount, cur))}</span></li>`).join("")}
+          ${explM.filter((x) => EXPL_CATS[x.cat].affects).map((x) => `<li><span>${explText(x)}</span><span class="mono">${esc(fmtSigned(x.amount, cur))}</span></li>`).join("")}
         </ul>`}
         ${savedVals.length ? Charts.stacked({
           labels, fmtTick: fmtTickFor(cur), highlight: mi,
@@ -1154,7 +1222,7 @@
           ${loanM.sum > 0 ? `<li><span>Less: new loan money (borrowed, not saved)${loanM.items.length ? ` · ${loanM.items.join(", ")}` : ""}</span><span class="mono">−${esc(fmtMoney(loanM.sum, cur))}</span></li>` : ""}
           <li class="sum"><span>= Total saved, all sources</span><span class="mono ${toneOf(totalSavedM)}">${esc(fmtSigned(totalSavedM, cur))}</span></li>
           ${savedM != null ? `<li><span>Less: saved from income</span><span class="mono">${esc(fmtSigned(-savedM, cur))}</span></li>` : ""}
-          ${explM.filter((x) => !EXPL_CATS[x.cat].affects).map((x) => `<li><span>Less: ${esc(EXPL_CATS[x.cat].label.replace(/ \(.*\)$/, "").toLowerCase())}${norm(x.row.note) ? ` · ${esc(x.row.note)}` : ""}</span><span class="mono">${esc(fmtSigned(-x.amount, cur))}</span></li>`).join("")}
+          ${explM.filter((x) => !EXPL_CATS[x.cat].affects && Math.abs(x.amount) >= 0.5).map((x) => `<li><span>Less: ${x.cat === "own_transfer" ? `transfer ${explText(x)}` : explText(x)}</span><span class="mono">${esc(fmtSigned(-x.amount, cur))}</span></li>`).join("")}
         </ul>
         ${otherM != null ? `<div class="spread commit"><span>${Math.abs(otherM) < 1 ? "Everything explained" : otherM >= 0 ? "Unexplained money in" : "Unexplained money out"}</span><span class="mono ${Math.abs(otherM) < 1 ? "muted" : otherM >= 0 ? "pos" : "neg"}">${Math.abs(otherM) < 1 ? "✓" : `${otherM >= 0 ? "+" : "−"}${esc(fmtMoney(Math.abs(otherM), cur))}`}</span></div>
         ${Math.abs(otherM) >= 1 ? `<div class="muted small">${otherM >= 0 ? "e.g. extra income, friends paying you back, transfers in, investment gains." : "e.g. cash, Bit, transfers out, investment losses."} Tell the app what it was to make your savings exact.</div>` : ""}

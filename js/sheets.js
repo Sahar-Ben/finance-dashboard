@@ -21,7 +21,9 @@
     // one_month = "yes": the row's amount applies to from_month only (an exception), not from then on.
     Fixed: ["id", "name", "amount", "currency", "owner", "paid_from", "day", "from_month", "to_month", "notes", "loan_id", "direction", "one_month"],
     // What a person says their unexplained money in/out was for a month. amount: + in, − out.
-    Explained: ["id", "month", "owner", "category", "amount", "currency", "note", "entered_by", "entered_at"],
+    // For own transfers, gross is the amount moved and amount is its effect on the person's share.
+    Explained: ["id", "month", "owner", "category", "amount", "currency", "note", "entered_by", "entered_at",
+      "from_account", "to_account", "card_id", "gross"],
   };
 
   class SheetsError extends Error {
