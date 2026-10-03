@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.03-5";
+  const APP_VERSION = "2026.10.03-6";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
@@ -953,6 +953,17 @@
       if (!now.hasBalances || !prev.hasBalances || now.incomplete || prev.incomplete) return null;
       return now.assets - prev.assets;
     };
+    // What blocks the balance comparison for a month: missing balances or missing exchange rates, per month.
+    const cashBlockers = (m) => {
+      const out = [];
+      [Calc.shiftMonth(m, -1), m].forEach((mm) => {
+        const t = cashAt(mm, m);
+        if (!t.hasBalances) out.push(`no bank, savings or investment balance at all for ${Calc.monthLabel(mm, true)}`);
+        t.missing.forEach((a) => out.push(`${norm(a.nickname) || a.id}: no balance for ${Calc.monthLabel(mm, true)} (updated by ${norm(a.updater) || "—"})`));
+        t.unconverted.forEach((a) => out.push(`${norm(a.nickname) || a.id}: exchange rate missing for ${Calc.monthLabel(mm, true)}`));
+      });
+      return out;
+    };
     // Borrowed this month: increase in each loan's balance (a loan first entered this month counts in full).
     const newLoanMoney = (m) => {
       const pm = Calc.shiftMonth(m, -1);
@@ -1019,7 +1030,12 @@
           ariaLabel: "Saved from income per month",
         }) : ""}
         <div class="label" style="margin-top:6px">Balance status · ${Calc.monthLabel(month, true)}</div>
-        ${cashM == null ? `<div class="muted small">${Calc.monthLabel(Calc.shiftMonth(month, -1))} and ${Calc.monthLabel(month)} both need all bank, savings and investment balances to show how your balances moved.</div>` : `
+        ${cashM == null ? (() => {
+          const why = cashBlockers(month);
+          return `<div class="muted small">To show how your balances moved, ${Calc.monthLabel(Calc.shiftMonth(month, -1))} and ${Calc.monthLabel(month)} need every bank, savings and investment balance. Missing:</div>
+            <ul class="plain-list">${why.map((w) => `<li class="small warn-text">${esc(w)}</li>`).join("") || `<li class="small muted">nothing found; try reopening the app</li>`}</ul>
+            <a class="btn block" href="#update">Add the missing balances</a>`;
+        })() : `
         <ul class="plain-list">
           <li><span>Bank, savings & investments changed</span><span class="mono ${toneOf(cashM)}">${esc(fmtSigned(cashM, cur))}</span></li>
           ${loanM.sum > 0 ? `<li><span>Less: new loan money (borrowed, not saved)${loanM.items.length ? ` · ${loanM.items.join(", ")}` : ""}</span><span class="mono">−${esc(fmtMoney(loanM.sum, cur))}</span></li>` : ""}

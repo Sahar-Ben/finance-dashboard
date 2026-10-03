@@ -165,6 +165,8 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 
 17. **Total saved, all sources** (requested after change 16). Next to *saved from salary & fixed income*, the My savings card shows **total saved, all sources** = change in bank + savings + investment balances − new loan money. It is worked out automatically from balances, so extra income paid straight into the bank, friends paying back and similar are included without entering them (the app can't tell the reason, only the amount). It needs every balance for this and last month, else it shows "—". Balance status reads as a sum: balances changed → less new loan money → **= total saved, all sources** → less saved from salary & fixed income → **other money in/out**. The chart readout shows both figures per month.
 
+18. **Balance status says what's missing** (requested after change 17). When the balance comparison can't be made, the card lists each blocker for the previous and selected month: an expected bank, savings or investment account without a balance (with who updates it), an account whose exchange rate is missing, or a month with no such balances at all. It also offers an "Add the missing balances" button.
+
 ## How to work
 
 Build one stage at a time. After each stage: update SPEC.md, commit, merge to main, and give a plain-language test checklist. Wait for the go-ahead before the next stage.
