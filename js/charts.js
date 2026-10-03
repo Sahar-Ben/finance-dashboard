@@ -123,7 +123,9 @@
     const n = o.labels.length;
     const up = o.labels.map((_, i) => o.series.reduce((s, se) => s + (se.values[i] || 0), 0));
     const down = o.labels.map((_, i) => (o.negative && o.negative.values[i]) || 0);
-    const has = o.labels.map((_, i) => o.series.some((se) => se.values[i] != null));
+    // A month counts as having data if any series or the below-zero series has a value.
+    const has = o.labels.map((_, i) => o.series.some((se) => se.values[i] != null)
+      || !!(o.negative && o.negative.values[i] != null && o.negative.values[i] > 0));
     if (!has.some(Boolean)) return `<div class="chart-empty muted">No data for this period.</div>`;
     const t = niceTicks(-Math.max(0, ...down), Math.max(0, ...up), 4);
     const f = frame(n);
