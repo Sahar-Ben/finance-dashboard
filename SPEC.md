@@ -167,6 +167,8 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 
 18. **Balance status says what's missing** (requested after change 17). When the balance comparison can't be made, the card lists each blocker for the previous and selected month: an expected bank, savings or investment account without a balance (with who updates it), an account whose exchange rate is missing, or a month with no such balances at all. It also offers an "Add the missing balances" button.
 
+19. **Explaining other money in/out** (requested after change 18). When balance status shows unexplained money, an **Explain** button lets the person say what it was, split into any number of parts, saved in a new **Explained** tab (id, month, owner, category, amount (+ in / − out), currency, note, entered_by, entered_at). Explanations are personal (owner = the signed-in person) and per month. Categories: **Extra income** and **Paid back (friend's share)** (in), and **Spending: cash / Bit / transfer** (out). These change *saved from income*, which is listed under salary/spending and included in the chart, average and % of income. **Transfer (not income or spending)** and **Investment gain or loss** (in or out) are neutral: they're listed under balance status and only reduce what's unexplained. Unexplained = total saved − saved from income − neutral explanations; at zero the card shows "Everything explained ✓". The Explain screen pre-fills the remaining amount and lets an explanation be deleted.
+
 ## How to work
 
 Build one stage at a time. After each stage: update SPEC.md, commit, merge to main, and give a plain-language test checklist. Wait for the go-ahead before the next stage.

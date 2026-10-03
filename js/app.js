@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.03-6";
+  const APP_VERSION = "2026.10.03-7";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
@@ -357,12 +357,13 @@
   }
 
   async function loadData() {
-    const [settings, accounts, snaps, rates, goals, fixed] = await Promise.all([
+    const [settings, accounts, snaps, rates, goals, fixed, explained] = await Promise.all([
       Sheets.readSettings(), Sheets.readTab("Accounts"), Sheets.readTab("Snapshots"), Sheets.readTab("Rates"), Sheets.readTab("Goals"),
-      Sheets.readTab("Fixed"),
+      Sheets.readTab("Fixed"), Sheets.readTab("Explained"),
     ]);
     state.goals = goals.rows;
     state.fixed = fixed.rows;
+    state.explained = explained.rows;
     state.settings = settings;
     state.accounts = accounts.rows;
     setSnapshots(snaps);
@@ -760,6 +761,111 @@
       .filter((p) => p.amount != null);
   }
 
+  // ---------- Explaining other money in/out ----------
+
+  // affects: true = changes "saved from income" (income, paid back, spending); false = neutral, only explained.
+  const EXPL_CATS = {
+    income: { label: "Extra income", dir: "in", affects: true },
+    refund: { label: "Paid back (friend's share)", dir: "in", affects: true },
+    spending: { label: "Spending: cash / Bit / transfer", dir: "out", affects: true },
+    transfer: { label: "Transfer (not income or spending)", dir: "both", affects: false },
+    investment: { label: "Investment gain or loss", dir: "both", affects: false },
+  };
+
+  // My explanations for a month, converted to the display currency: [{ row, cat, amount (signed) }].
+  function explainedFor(month, cur) {
+    const me = lower(state.me.name);
+    return (state.explained || []).filter((r) => Calc.normMonth(r.month) === month && lower(r.owner) === me && EXPL_CATS[lower(r.category)])
+      .map((r) => {
+        const a = Calc.parseAmount(r.amount);
+        const v = isFinite(a) ? Calc.convert(a, norm(r.currency).toUpperCase() || "ILS", cur, state.rates, month) : null;
+        return { row: r, cat: lower(r.category), amount: v };
+      }).filter((x) => x.amount != null);
+  }
+  const explSum = (list, affects) => list.filter((x) => EXPL_CATS[x.cat].affects === affects).reduce((t, x) => t + x.amount, 0);
+
+  async function loadExplained() {
+    state.explained = (await Sheets.readTab("Explained")).rows;
+  }
+
+  function openExplain(month, unexplained) {
+    const cur = state.displayCur;
+    const list = explainedFor(month, cur);
+    const dirDefault = unexplained >= 0 ? "in" : "out";
+    openSheet(`
+      <form id="ex-form" class="stack-lg" novalidate>
+        <div class="spread"><div><div class="label">Explain · ${esc(Calc.monthLabel(month, true))}</div>
+          <h2>${unexplained >= 0 ? "Money came in" : "Money went out"}: ${esc(fmtMoney(Math.abs(unexplained), cur))}</h2></div>
+          <button type="button" class="icon-btn" data-close aria-label="Close">✕</button></div>
+        <p class="muted">Worked out from your balances. Tell the app what it was; you can split it into several parts. Anything left stays "unexplained".</p>
+        ${list.length ? `<ul class="plain-list">${list.map((x) => `
+          <li><span>${esc(EXPL_CATS[x.cat].label)}${norm(x.row.note) ? ` · ${esc(x.row.note)}` : ""}</span>
+            <span class="row"><span class="mono ${x.amount >= 0 ? "pos" : "neg"}">${esc(fmtSigned(x.amount, cur))}</span>
+            <button type="button" class="btn small danger" data-ex-del="${esc(x.row.id)}">Delete</button></span></li>`).join("")}</ul>` : ""}
+        <div class="field"><label class="label" for="ex-cat">What was it?</label>
+          <select id="ex-cat">${Object.entries(EXPL_CATS).filter(([, c]) => c.dir === "both" || c.dir === dirDefault)
+            .map(([k, c]) => `<option value="${k}">${esc(c.label)}</option>`).join("")}
+            ${Object.entries(EXPL_CATS).filter(([, c]) => c.dir !== "both" && c.dir !== dirDefault)
+            .map(([k, c]) => `<option value="${k}">${esc(c.label)}</option>`).join("")}</select></div>
+        <div class="field" id="ex-dir-field"><span class="label">Direction</span>
+          <div class="seg" id="ex-dir">
+            <button type="button" data-dir="in" aria-pressed="${dirDefault === "in"}">IN (+)</button>
+            <button type="button" data-dir="out" aria-pressed="${dirDefault === "out"}">OUT (−)</button>
+          </div></div>
+        <div class="field-row">
+          <div class="field"><label class="label" for="ex-amount">Amount (${esc(cur)})</label>
+            <input id="ex-amount" type="text" inputmode="decimal" value="${Math.round(Math.abs(unexplained))}"></div>
+          <div class="field"><label class="label" for="ex-note">Note</label><input id="ex-note" autocomplete="off" placeholder="Optional"></div>
+        </div>
+        <p class="err-text" id="ex-err"></p>
+        <button class="btn primary block" type="submit">Save</button>
+      </form>`);
+    const $cat = document.getElementById("ex-cat");
+    const syncDir = () => {
+      const c = EXPL_CATS[$cat.value];
+      document.getElementById("ex-dir-field").hidden = c.dir !== "both";
+      if (c.dir !== "both") document.querySelectorAll("#ex-dir button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.dir === c.dir)));
+    };
+    $cat.addEventListener("change", syncDir);
+    syncDir();
+    document.getElementById("ex-dir").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-dir]");
+      if (b) document.querySelectorAll("#ex-dir button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    });
+    const done = (msg) => { closeSheet(); toast(msg); route(); };
+    $sheetBody.querySelectorAll("[data-ex-del]").forEach((b) => b.addEventListener("click", async () => {
+      setBusy(b, true, "…");
+      try {
+        await guarded(async () => {
+          await loadExplained();
+          const r = state.explained.find((x) => norm(x.id) === b.dataset.exDel);
+          if (r) await Sheets.deleteRows("Explained", [r._row]);
+          await loadExplained();
+        });
+        done("Removed");
+      } catch (e) { document.getElementById("ex-err").textContent = friendlyError(e); setBusy(b, false); }
+    }));
+    document.getElementById("ex-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const amt = Calc.parseAmount(document.getElementById("ex-amount").value);
+      if (!isFinite(amt) || amt <= 0) { document.getElementById("ex-err").textContent = "Enter the amount."; return; }
+      const dir = document.querySelector("#ex-dir [aria-pressed=\"true\"]").dataset.dir;
+      const btn = e.target.querySelector('[type="submit"]');
+      setBusy(btn, true, "Saving…");
+      try {
+        await guarded(async () => {
+          await Sheets.appendRows("Explained", [{
+            id: `x-${Date.now().toString(36)}`, month, owner: state.me.name, category: $cat.value,
+            amount: dir === "out" ? -amt : amt, currency: cur, note: norm(document.getElementById("ex-note").value),
+            entered_by: state.me.name, entered_at: new Date().toISOString(),
+          }]);
+          await loadExplained();
+        });
+        done("Saved");
+      } catch (ex) { document.getElementById("ex-err").textContent = friendlyError(ex); setBusy(btn, false); }
+    });
+  }
+
   function renderCards() {
     const cur = state.displayCur;
     const idx = Calc.indexSnapshots(state.snapshots);
@@ -986,18 +1092,24 @@
       return { sum, items };
     };
     const salarySeries = yearMonths.map(salaryTotal);
+    // Explanations: income / paid back / spending-not-on-card change "saved from income"; transfers and investments don't.
+    const explSeries = yearMonths.map((m) => explSum(explainedFor(m, cur), true));
     const savedSeries = yearMonths.map((m, i) => (salarySeries[i] == null ? null
-      : salarySeries[i] + (incomeSeries[i] || 0) - (totals[i] || 0)));
+      : salarySeries[i] + (incomeSeries[i] || 0) - (totals[i] || 0) + explSeries[i]));
     const mi = yearMonths.indexOf(month);
     const salM = mi >= 0 ? salarySeries[mi] : salaryTotal(month);
     const inM = (salM || 0) + (myIncomeM || 0);
-    const savedM = salM == null ? null : inM - (total || 0);
+    const explM = explainedFor(month, cur);
+    const explAffM = explSum(explM, true);
+    const explNeutralM = explSum(explM, false);
+    const savedM = salM == null ? null : inM - (total || 0) + explAffM;
     const rateM = savedM != null && inM > 0 ? (savedM / inM) * 100 : null;
     const savedVals = savedSeries.filter((v) => v != null);
     const avgSaved = savedVals.length ? savedVals.reduce((a, b) => a + b, 0) / savedVals.length : null;
     const cashM = cashChange(month);
     const loanM = newLoanMoney(month);
-    const otherM = cashM != null && savedM != null ? cashM - loanM.sum - savedM : null;
+    // Unexplained = total saved − saved from income (already including explained income/refunds/spending) − neutral explanations.
+    const otherM = cashM != null && savedM != null ? cashM - loanM.sum - savedM - explNeutralM : null;
     // Total saved from all sources, worked out from balances alone (extra income, friends paying back included).
     const totalSavedM = cashM != null ? cashM - loanM.sum : null;
     const totalSeries = yearMonths.map((m) => { const c = cashChange(m); return c == null ? null : c - newLoanMoney(m).sum; });
@@ -1012,7 +1124,7 @@
         ${savedM == null ? `<p class="muted">No salary entered for ${Calc.monthLabel(month, true)} yet. Add it with Update to see what you saved.</p><a class="btn block" href="#update">Update</a>` : `
         <div class="kpi-grid">
           <div><div class="mid-number ${savedM >= 0 ? "pos" : "neg"}">${esc(signed(savedM))}</div>
-            <div class="muted small">from salary & fixed income${rateM != null ? ` · ${rateM.toFixed(1)}% of it` : ""}</div></div>
+            <div class="muted small">saved from income${rateM != null ? ` · ${rateM.toFixed(1)}% of it` : ""}</div></div>
           <div><div class="mid-number ${totalSavedM == null ? "muted" : totalSavedM >= 0 ? "pos" : "neg"}">${totalSavedM == null ? "—" : esc(signed(totalSavedM))}</div>
             <div class="muted small">total saved, all sources${totalSavedM == null ? " (needs all balances for this and last month)" : " (from balances)"}</div></div>
         </div>
@@ -1021,6 +1133,7 @@
           <li><span>Salary</span><span class="mono">${esc(fmtMoney(salM, cur))}</span></li>
           ${myIncomeM ? `<li><span>Fixed income</span><span class="mono">${esc(fmtMoney(myIncomeM, cur))}</span></li>` : ""}
           <li><span>Spending (cards, fixed, loans)</span><span class="mono">−${esc(fmtMoney(total || 0, cur))}</span></li>
+          ${explM.filter((x) => EXPL_CATS[x.cat].affects).map((x) => `<li><span>${esc(EXPL_CATS[x.cat].label.replace(/ \(.*\)$/, ""))}${norm(x.row.note) ? ` · ${esc(x.row.note)}` : ""}</span><span class="mono">${esc(fmtSigned(x.amount, cur))}</span></li>`).join("")}
         </ul>`}
         ${savedVals.length ? Charts.stacked({
           labels, fmtTick: fmtTickFor(cur), highlight: mi,
@@ -1040,10 +1153,12 @@
           <li><span>Bank, savings & investments changed</span><span class="mono ${toneOf(cashM)}">${esc(fmtSigned(cashM, cur))}</span></li>
           ${loanM.sum > 0 ? `<li><span>Less: new loan money (borrowed, not saved)${loanM.items.length ? ` · ${loanM.items.join(", ")}` : ""}</span><span class="mono">−${esc(fmtMoney(loanM.sum, cur))}</span></li>` : ""}
           <li class="sum"><span>= Total saved, all sources</span><span class="mono ${toneOf(totalSavedM)}">${esc(fmtSigned(totalSavedM, cur))}</span></li>
-          ${savedM != null ? `<li><span>Less: saved from salary & fixed income</span><span class="mono">${esc(fmtSigned(-savedM, cur))}</span></li>` : ""}
+          ${savedM != null ? `<li><span>Less: saved from income</span><span class="mono">${esc(fmtSigned(-savedM, cur))}</span></li>` : ""}
+          ${explM.filter((x) => !EXPL_CATS[x.cat].affects).map((x) => `<li><span>Less: ${esc(EXPL_CATS[x.cat].label.replace(/ \(.*\)$/, "").toLowerCase())}${norm(x.row.note) ? ` · ${esc(x.row.note)}` : ""}</span><span class="mono">${esc(fmtSigned(-x.amount, cur))}</span></li>`).join("")}
         </ul>
-        ${otherM != null ? `<div class="spread commit"><span>${otherM >= 0 ? "Other money in" : "Other money out"}</span><span class="mono ${otherM >= 0 ? "pos" : "neg"}">${otherM >= 0 ? "+" : "−"}${esc(fmtMoney(Math.abs(otherM), cur))}</span></div>
-        <div class="muted small">${otherM >= 0 ? "e.g. friends paying you back, transfers in, investment gains." : "e.g. cash, Bit, transfers out, investment losses."} Worked out from your balances; transfers between your own accounts cancel out.</div>` : ""}`}
+        ${otherM != null ? `<div class="spread commit"><span>${Math.abs(otherM) < 1 ? "Everything explained" : otherM >= 0 ? "Unexplained money in" : "Unexplained money out"}</span><span class="mono ${Math.abs(otherM) < 1 ? "muted" : otherM >= 0 ? "pos" : "neg"}">${Math.abs(otherM) < 1 ? "✓" : `${otherM >= 0 ? "+" : "−"}${esc(fmtMoney(Math.abs(otherM), cur))}`}</span></div>
+        ${Math.abs(otherM) >= 1 ? `<div class="muted small">${otherM >= 0 ? "e.g. extra income, friends paying you back, transfers in, investment gains." : "e.g. cash, Bit, transfers out, investment losses."} Tell the app what it was to make your savings exact.</div>` : ""}
+        <button type="button" class="btn block" id="sv-explain">${explM.length ? "Explain / edit" : "Explain this"}</button>` : ""}`}
       </div>`;
     const SPEND_COLORS = { cards: Charts.TYPE_COLORS.current, fixed: Charts.TYPE_COLORS.savings };
     const INCOME_COLOR = "#5BE3A7";
@@ -1132,6 +1247,8 @@
     bindCurSeg();
     const go = (m) => { state.cardMonth = m; const y = window.scrollY; renderCards(); window.scrollTo(0, y); };
     $screen.querySelectorAll("[data-fx-month]").forEach((li) => li.addEventListener("click", () => openMonthOverride(li.dataset.fxMonth, month)));
+    const exBtn = document.getElementById("sv-explain");
+    if (exBtn) exBtn.addEventListener("click", () => openExplain(month, otherM));
     document.getElementById("sp-view").addEventListener("click", (e) => {
       const b = e.target.closest("[data-view]");
       if (!b) return;
