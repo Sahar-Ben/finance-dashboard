@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.03-3";
+  const APP_VERSION = "2026.10.03-4";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
@@ -930,10 +930,10 @@
         ${missing.length ? `<div class="muted small">Some card totals are missing this month, so the share may look higher than it is.</div>` : ""}
       </div>` : "";
     // ---- Savings ----
-    // Tracked = (salary + fixed income) − (cards + fixed payments + loan payments), at your share.
-    // Actual  = change in your cash-like balances (bank + savings + investments), both months at this
-    //           month's rate, only when both months have every expected balance.
-    // Other money in/out = actual − tracked: transfers, friends paying back, Bit, cash; not entered by hand.
+    // Saved from income (headline, chart, average) = (salary + fixed income) − (cards + fixed payments + loan payments),
+    // at your share. Balance status (only when this and last month have every bank/savings/investment balance):
+    // change in those balances, minus new loan money (a loan balance going up, or a new loan), and the rest
+    // compared with "saved from income" = other money in/out (transfers, friends paying back, cash).
     const salaryTotal = (m) => {
       let sum = 0, any = false;
       salaries.forEach((a) => {
@@ -948,27 +948,45 @@
     const cashAccounts = state.accounts.filter((a) => CASH_TYPES.includes(lower(a.type)));
     const balMonths = Calc.snapshotMonths(state.snapshots, state.accounts).balances;
     const cashAt = (m, rateMonth) => Calc.monthTotals(cashAccounts, idx, m, cur, state.rates, balMonths[0] || null, rateMonth, myShare);
-    const actualChange = (m) => {
+    const cashChange = (m) => {
       const now = cashAt(m, m), prev = cashAt(Calc.shiftMonth(m, -1), m);
       if (!now.hasBalances || !prev.hasBalances || now.incomplete || prev.incomplete) return null;
       return now.assets - prev.assets;
     };
+    // Borrowed this month: increase in each loan's balance (a loan first entered this month counts in full).
+    const newLoanMoney = (m) => {
+      const pm = Calc.shiftMonth(m, -1);
+      let sum = 0;
+      const items = [];
+      state.accounts.filter((a) => lower(a.type) === "loan" && myShare(a) > 0).forEach((a) => {
+        const now = idx.get(norm(a.id), m);
+        if (!now) return;
+        const prev = idx.get(norm(a.id), pm);
+        const first = idx.firstMonth.get(norm(a.id));
+        if (!prev && first !== m) return; // previous balance unknown: can't tell
+        const own = norm(now.currency).toUpperCase() || norm(a.currency).toUpperCase();
+        const up = Calc.parseAmount(now.amount) - (prev ? Calc.parseAmount(prev.amount) : 0);
+        if (!(up > 0)) return;
+        const v = Calc.convert(up, own, cur, state.rates, m);
+        if (v == null) return;
+        sum += v * myShare(a);
+        items.push(accountName(a));
+      });
+      return { sum, items };
+    };
     const salarySeries = yearMonths.map(salaryTotal);
-    const trackedSeries = yearMonths.map((m, i) => (salarySeries[i] == null ? null
+    const savedSeries = yearMonths.map((m, i) => (salarySeries[i] == null ? null
       : salarySeries[i] + (incomeSeries[i] || 0) - (totals[i] || 0)));
-    const actualSeries = yearMonths.map((m) => actualChange(m));
-    // Headline per month: what actually stayed when known, else the tracked saving.
-    const savedSeries = yearMonths.map((m, i) => (actualSeries[i] != null ? actualSeries[i] : trackedSeries[i]));
     const mi = yearMonths.indexOf(month);
     const salM = mi >= 0 ? salarySeries[mi] : salaryTotal(month);
     const inM = (salM || 0) + (myIncomeM || 0);
-    const trackedM = salM == null ? null : inM - (total || 0);
-    const actualM = mi >= 0 ? actualSeries[mi] : actualChange(month);
-    const headM = actualM != null ? actualM : trackedM;
-    const otherM = actualM != null && trackedM != null ? actualM - trackedM : null;
-    const rateM = headM != null && inM > 0 ? (headM / inM) * 100 : null;
+    const savedM = salM == null ? null : inM - (total || 0);
+    const rateM = savedM != null && inM > 0 ? (savedM / inM) * 100 : null;
     const savedVals = savedSeries.filter((v) => v != null);
     const avgSaved = savedVals.length ? savedVals.reduce((a, b) => a + b, 0) / savedVals.length : null;
+    const cashM = cashChange(month);
+    const loanM = newLoanMoney(month);
+    const otherM = cashM != null && savedM != null ? cashM - loanM.sum - savedM : null;
     const signed = (v) => `${v >= 0 ? "" : "−"}${fmtMoney(Math.abs(v), cur)}`;
     const savingsHtml = !salaries.length ? `
       <div class="card stack">
@@ -976,31 +994,31 @@
         <p class="muted">To see how much you save each month, add a <strong>Salary</strong> account (Accounts → + Add → Type: Salary) and enter each month's net salary with Update, like a card total.</p>
       </div>` : `
       <div class="card stack">
-        <div class="label">My savings · ${Calc.monthLabel(month, true)}</div>
-        ${headM == null ? `<p class="muted">No salary entered for ${Calc.monthLabel(month, true)} yet. Add it with Update to see what you saved.</p><a class="btn block" href="#update">Update</a>` : `
-        <div class="mid-number ${headM >= 0 ? "pos" : "neg"}">${esc(signed(headM))}</div>
-        <div class="muted small">${actualM != null ? "What actually stayed in your bank, savings and investment accounts" : "From what you entered (balances for this month or last month are incomplete)"}</div>
+        <div class="label">Saved from income · ${Calc.monthLabel(month, true)}</div>
+        ${savedM == null ? `<p class="muted">No salary entered for ${Calc.monthLabel(month, true)} yet. Add it with Update to see what you saved.</p><a class="btn block" href="#update">Update</a>` : `
+        <div class="mid-number ${savedM >= 0 ? "pos" : "neg"}">${esc(signed(savedM))}</div>
         <div class="muted small">${rateM != null ? `${rateM.toFixed(1)}% of income` : ""}${avgSaved != null ? ` · average ${esc(fmtMoney(avgSaved, cur))} / month in ${year}` : ""}</div>
         <ul class="plain-list">
-          ${salM != null ? `<li><span>Salary</span><span class="mono">${esc(fmtMoney(salM, cur))}</span></li>` : ""}
+          <li><span>Salary</span><span class="mono">${esc(fmtMoney(salM, cur))}</span></li>
           ${myIncomeM ? `<li><span>Fixed income</span><span class="mono">${esc(fmtMoney(myIncomeM, cur))}</span></li>` : ""}
           <li><span>Spending (cards, fixed, loans)</span><span class="mono">−${esc(fmtMoney(total || 0, cur))}</span></li>
-          ${trackedM != null && actualM != null ? `<li><span>= From what you entered</span><span class="mono">${esc(signed(trackedM))}</span></li>` : ""}
-        </ul>
-        ${otherM != null ? `
-        <div class="spread commit"><span>${otherM >= 0 ? "Other money in" : "Other money out"}</span><span class="mono ${otherM >= 0 ? "pos" : "neg"}">${otherM >= 0 ? "+" : "−"}${esc(fmtMoney(Math.abs(otherM), cur))}</span></div>
-        <div class="muted small">${otherM >= 0
-          ? "Worked out from your balances: e.g. friends paying you back, transfers in, investment gains."
-          : "Worked out from your balances: e.g. cash, Bit, transfers out, investment losses."} Transfers between your own accounts cancel out; moving money from your own account to a joint one counts half (joint is 50% yours).</div>`
-        : trackedM != null ? `<div class="muted small">To work out other money in/out (transfers, friends paying back, cash), ${Calc.monthLabel(Calc.shiftMonth(month, -1))} and ${Calc.monthLabel(month)} both need all bank, savings and investment balances.</div>` : ""}`}
+        </ul>`}
         ${savedVals.length ? Charts.stacked({
           labels, fmtTick: fmtTickFor(cur), highlight: mi,
           series: [{ key: "saved", color: "#5BE3A7", values: savedSeries.map((v) => (v != null && v > 0 ? v : null)) }],
           negative: { color: Charts.TYPE_COLORS.loan, values: savedSeries.map((v) => (v != null && v < 0 ? -v : null)) },
-          tips: yearMonths.map((m, i) => `${Calc.monthLabel(m, true)} · ${savedSeries[i] == null ? "no salary entered"
-            : `${actualSeries[i] != null ? "stayed" : "saved (entered)"} ${fmtSigned(savedSeries[i], cur)}${actualSeries[i] != null && trackedSeries[i] != null ? ` · other ${fmtSigned(actualSeries[i] - trackedSeries[i], cur)}` : ""}`}`),
-          ariaLabel: "Saved per month",
+          tips: yearMonths.map((m, i) => `${Calc.monthLabel(m, true)} · ${savedSeries[i] == null ? "no salary entered" : `saved from income ${fmtSigned(savedSeries[i], cur)}`}`),
+          ariaLabel: "Saved from income per month",
         }) : ""}
+        <div class="label" style="margin-top:6px">Balance status · ${Calc.monthLabel(month, true)}</div>
+        ${cashM == null ? `<div class="muted small">${Calc.monthLabel(Calc.shiftMonth(month, -1))} and ${Calc.monthLabel(month)} both need all bank, savings and investment balances to show how your balances moved.</div>` : `
+        <ul class="plain-list">
+          <li><span>Bank, savings & investments changed</span><span class="mono ${toneOf(cashM)}">${esc(fmtSigned(cashM, cur))}</span></li>
+          ${loanM.sum > 0 ? `<li><span>New loan money (borrowed, not saved)${loanM.items.length ? ` · ${loanM.items.join(", ")}` : ""}</span><span class="mono">−${esc(fmtMoney(loanM.sum, cur))}</span></li>` : ""}
+          ${savedM != null ? `<li><span>Less: saved from income</span><span class="mono">${esc(fmtSigned(-savedM, cur))}</span></li>` : ""}
+        </ul>
+        ${otherM != null ? `<div class="spread commit"><span>${otherM >= 0 ? "Other money in" : "Other money out"}</span><span class="mono ${otherM >= 0 ? "pos" : "neg"}">${otherM >= 0 ? "+" : "−"}${esc(fmtMoney(Math.abs(otherM), cur))}</span></div>
+        <div class="muted small">${otherM >= 0 ? "e.g. friends paying you back, transfers in, investment gains." : "e.g. cash, Bit, transfers out, investment losses."} Worked out from your balances; transfers between your own accounts cancel out.</div>` : ""}`}
       </div>`;
     const SPEND_COLORS = { cards: Charts.TYPE_COLORS.current, fixed: Charts.TYPE_COLORS.savings };
     const INCOME_COLOR = "#5BE3A7";
