@@ -4,7 +4,9 @@
   "use strict";
 
   // long_term is shown as "Pension"; study_fund is Keren Hishtalmut.
-  const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card"];
+  // card and salary are flows, not balances: they never count in reachable money or the long-term total.
+  const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
+  const FLOW_TYPES = ["card", "salary"];
   const ASSET_TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "home"];
   const CURRENCIES = ["ILS", "USD", "EUR"];
   const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -159,7 +161,7 @@
       const m = normMonth(s.month);
       if (!m) return;
       all.add(m);
-      if (typeOf.get(norm(s.account_id)) !== "card") balances.add(m);
+      if (!FLOW_TYPES.includes(typeOf.get(norm(s.account_id)))) balances.add(m);
     });
     const desc = (set) => [...set].sort().reverse();
     return { all: desc(all), balances: desc(balances) };
@@ -191,6 +193,7 @@
     const unconverted = [];
     let balances = 0;
     let cards = 0;
+    let salary = 0;
     let cardCount = 0;
 
     accounts.forEach((a) => {
@@ -200,7 +203,7 @@
       if (!share) return;
       const b = balanceFor(a, month, idx);
       if (!b) {
-        if (type === "card" || !isActive(a)) return;
+        if (FLOW_TYPES.includes(type) || !isActive(a)) return;
         const first = idx.firstMonth.get(norm(a.id));
         const expected = first ? first <= month : (latestBalanceMonth && month >= latestBalanceMonth);
         if (expected) missing.push(a);
@@ -213,6 +216,7 @@
       const v = v0 == null ? null : v0 * share;
       if (v == null) { unconverted.push(a); return; }
       if (type === "card") { cards += v; cardCount++; return; }
+      if (type === "salary") { salary += v; return; }
       if (!b.carried) balances++;
       byType[type] += v;
       counts[type] = (counts[type] || 0) + 1;
@@ -222,7 +226,7 @@
     const assets = ASSET_TYPES.reduce((s, t) => s + byType[t], 0);
     const longTerm = assets - byType.loan;
     return {
-      month, reachable, longTerm, assets, byType, counts, cards, cardCount, missing, unconverted,
+      month, reachable, longTerm, assets, byType, counts, cards, cardCount, salary, missing, unconverted,
       hasBalances: balances > 0,
       incomplete: missing.length > 0 || unconverted.length > 0,
     };
@@ -431,7 +435,7 @@
         asOf = normDate(r.as_of_date);
         if (!asOf) problems.push({ col: "as_of_date", msg: `Bad date "${norm(r.as_of_date)}". Use YYYY-MM-DD.` });
         else if (asOf > todayStr) problems.push({ col: "as_of_date", msg: "The as-of date is in the future." });
-        else if (month && type !== "card" && asOf.slice(0, 7) !== month) warnings.push(`As-of date ${asOf} is outside ${monthLabel(month, true)}.`);
+        else if (month && !FLOW_TYPES.includes(type) && asOf.slice(0, 7) !== month) warnings.push(`As-of date ${asOf} is outside ${monthLabel(month, true)}.`);
       } else if (month) {
         asOf = month === nowMonth ? todayStr : (month < nowMonth ? lastDayOfMonth(month) : todayStr);
         warnings.push(`No as-of date; ${asOf} will be used.`);
@@ -472,7 +476,7 @@
   }
 
   const api = {
-    TYPES, ASSET_TYPES, CURRENCIES, MONTH_NAMES, LARGE_CHANGE_RATIO, TRIVIAL_ILS,
+    TYPES, ASSET_TYPES, FLOW_TYPES, CURRENCIES, MONTH_NAMES, LARGE_CHANGE_RATIO, TRIVIAL_ILS,
     currentMonth, today, isMonth, normMonth, shiftMonth, monthLabel, lastDayOfMonth, normDate, parseAmount,
     validRate, rateTable, rateFor, convert,
     isActive, indexSnapshots, snapshotMonths, balanceFor, monthTotals, change, latestSnapshot, monthRange, dueList, goalProgress, splitIds, fixedSeries, fixedForMonth,

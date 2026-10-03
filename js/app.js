@@ -3,13 +3,14 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.02-19";
+  const APP_VERSION = "2026.10.03-1";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
-  const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card"];
+  const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
+  const isFlow = (a) => Calc.FLOW_TYPES.includes(lower(a.type)); // card or salary: monthly amounts, not balances
   const TYPE_LABEL = {
     current: "Bank", savings: "Savings", investment: "Investment", crypto: "Crypto",
-    long_term: "Pension", study_fund: "Keren Hishtalmut", loan: "Loan", home: "Home", card: "Card",
+    long_term: "Pension", study_fund: "Keren Hishtalmut", loan: "Loan", home: "Home", card: "Card", salary: "Salary",
   };
   const CURRENCIES = ["ILS", "USD", "EUR"];
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -770,7 +771,9 @@
         <div><div class="label">Cards & fixed payments</div><h1>Spending</h1></div>
       </div>
       <div class="cur-row">${curSegHtml()}</div>`;
-    const cardMonths = [...new Set(state.snapshots.filter((s) => cardIds.has(norm(s.account_id)))
+    const salaries = state.accounts.filter((a) => lower(a.type) === "salary");
+    const salaryIds = new Set(salaries.map((a) => norm(a.id)));
+    const cardMonths = [...new Set(state.snapshots.filter((s) => cardIds.has(norm(s.account_id)) || salaryIds.has(norm(s.account_id)))
       .map((s) => Calc.normMonth(s.month)).filter(Boolean))];
     // Months with fixed or loan payments: from the earliest start up to this month.
     const starts = [
@@ -926,6 +929,60 @@
         </div>
         ${missing.length ? `<div class="muted small">Some card totals are missing this month, so the share may look higher than it is.</div>` : ""}
       </div>` : "";
+    // ---- Savings: (salary + fixed income) − (cards + fixed payments + loan payments), at your share ----
+    const salaryTotal = (m) => {
+      let sum = 0, any = false;
+      salaries.forEach((a) => {
+        const f = shareOf(a);
+        if (!f) return;
+        const v = cardValue(a, m, true); // same lookup as cards: the month's snapshot, converted
+        if (v != null) { sum += v * f; any = true; }
+      });
+      return any ? sum : null;
+    };
+    const salarySeries = yearMonths.map(salaryTotal);
+    const savedSeries = yearMonths.map((m, i) => (salarySeries[i] == null ? null
+      : salarySeries[i] + (incomeSeries[i] || 0) - (totals[i] || 0)));
+    const mi = yearMonths.indexOf(month);
+    const salM = mi >= 0 ? salarySeries[mi] : salaryTotal(month);
+    const inM = (salM || 0) + (myIncomeM || 0);
+    const savedM = salM == null ? null : inM - (total || 0);
+    const rateM = savedM != null && inM > 0 ? (savedM / inM) * 100 : null;
+    const savedVals = savedSeries.filter((v) => v != null);
+    const avgSaved = savedVals.length ? savedVals.reduce((a, b) => a + b, 0) / savedVals.length : null;
+    // Check against balances: change in your long-term total vs the previous month, at this month's rate.
+    const balMonths = Calc.snapshotMonths(state.snapshots, state.accounts).balances;
+    const mt = (m) => Calc.monthTotals(state.accounts, idx, m, cur, state.rates, balMonths[0] || null, month, myShare);
+    const tNow = mt(month), tPrev = mt(Calc.shiftMonth(month, -1));
+    // Only compare when both months are complete; a missing balance would make the difference meaningless.
+    const balComparable = tNow.hasBalances && tPrev.hasBalances && !tNow.incomplete && !tPrev.incomplete;
+    const balDelta = balComparable ? tNow.longTerm - tPrev.longTerm : null;
+    const savingsHtml = !salaries.length ? `
+      <div class="card stack">
+        <div class="label">Savings</div>
+        <p class="muted">To see how much you save each month, add a <strong>Salary</strong> account (Accounts → + Add → Type: Salary) and enter each month's net salary with Update, like a card total.</p>
+      </div>` : `
+      <div class="card stack">
+        <div class="label">My savings · ${Calc.monthLabel(month, true)}</div>
+        ${savedM == null ? `<p class="muted">No salary entered for ${Calc.monthLabel(month, true)} yet. Add it with Update to see what you saved.</p><a class="btn block" href="#update">Update</a>` : `
+        <div class="mid-number ${savedM >= 0 ? "pos" : "neg"}">${savedM >= 0 ? "" : "−"}${esc(fmtMoney(Math.abs(savedM), cur))}</div>
+        <div class="muted small">${rateM != null ? `${rateM.toFixed(1)}% of income saved` : ""}${avgSaved != null ? ` · average ${esc(fmtMoney(avgSaved, cur))} / month in ${year}` : ""}</div>
+        <ul class="plain-list">
+          <li><span>Salary</span><span class="mono">${esc(fmtMoney(salM, cur))}</span></li>
+          ${myIncomeM ? `<li><span>Fixed income</span><span class="mono">${esc(fmtMoney(myIncomeM, cur))}</span></li>` : ""}
+          <li><span>Spending (cards, fixed, loans)</span><span class="mono">−${esc(fmtMoney(total || 0, cur))}</span></li>
+        </ul>
+        ${balDelta != null ? `
+        <div class="spread commit small"><span>Balances changed by</span><span class="mono ${toneOf(balDelta)}">${esc(fmtSigned(balDelta, cur))}</span></div>
+        <div class="muted small">Difference ${esc(fmtSigned(balDelta - savedM, cur))}: money not tracked here (cash, transfers, Bit), plus investment and pension gains, loan principal paid and timing between update days.</div>` : `<div class="muted small">To compare with how your balances changed, ${Calc.monthLabel(Calc.shiftMonth(month, -1))} and ${Calc.monthLabel(month)} both need all their balances entered.</div>`}`}
+        ${savedVals.length ? Charts.stacked({
+          labels, fmtTick: fmtTickFor(cur), highlight: mi,
+          series: [{ key: "saved", color: "#5BE3A7", values: savedSeries.map((v) => (v != null && v > 0 ? v : null)) }],
+          negative: { color: Charts.TYPE_COLORS.loan, values: savedSeries.map((v) => (v != null && v < 0 ? -v : null)) },
+          tips: yearMonths.map((m, i) => `${Calc.monthLabel(m, true)} · ${savedSeries[i] == null ? "no salary entered" : `saved ${fmtSigned(savedSeries[i], cur)}`}`),
+          ariaLabel: "Saved per month",
+        }) : ""}
+      </div>`;
     const SPEND_COLORS = { cards: Charts.TYPE_COLORS.current, fixed: Charts.TYPE_COLORS.savings };
     const INCOME_COLOR = "#5BE3A7";
     // Detail view: one series per card and per fixed/loan payment, at your share. Stable order
@@ -992,6 +1049,7 @@
           })}
           <div class="legend">${legendHtml}${incomeSeries.some((v) => v) ? `<span class="key"><i style="background:${INCOME_COLOR}"></i>Fixed income (below 0)</span>` : ""}</div>
         </div>
+        ${savingsHtml}
         ${fixedCard}
         ${cards.length ? `
         <div class="card stack">
@@ -1998,7 +2056,7 @@
         const good = state.imp.rows.filter((r) => !r.problems.length).map((r) => r.resolved);
         if (!good.length) throw new Error("Nothing left to save.");
         const out = await saveSnapshots(good, "import");
-        out.latest = good.filter((z) => lower(z.account.type) !== "card").map((z) => z.month).sort().pop() || null;
+        out.latest = good.filter((z) => !isFlow(z.account)).map((z) => z.month).sort().pop() || null;
         return out;
       });
       state.imp = { text: "", rows: null };
@@ -2108,7 +2166,7 @@
         syncRatesInBackground();
         toast(res.replaced ? "Balance replaced" : "Balance saved");
         state.manualDraft = { month: $month.value, as_of_date: $date.value };
-        if (lower(row.resolved.account.type) !== "card") state.ovMonth = row.resolved.month;
+        if (!isFlow(row.resolved.account)) state.ovMonth = row.resolved.month;
         renderManual();
       } catch (ex) {
         $err.textContent = friendlyError(ex);
@@ -2297,7 +2355,7 @@
     const info = idx ? latestInfo(a, idx) : null;
     const cur = state.displayCur;
     const bits = [TYPE_LABEL[type] || type, norm(a.owner)];
-    if (info) bits.push(type === "card" ? `${Calc.monthLabel(info.month)} total` : `upd ${shortDate(info.asOf) || Calc.monthLabel(info.month)}`);
+    if (info) bits.push(type === "card" ? `${Calc.monthLabel(info.month)} total` : type === "salary" ? `${Calc.monthLabel(info.month)} salary` : `upd ${shortDate(info.asOf) || Calc.monthLabel(info.month)}`);
     else bits.push("no balance yet");
     let right = "";
     if (info && isFinite(info.amount)) {
@@ -2325,7 +2383,7 @@
     let net = 0, any = false;
     list.forEach((a) => {
       const type = lower(a.type);
-      if (type === "card") return;
+      if (type === "card" || type === "salary") return;
       const info = latestInfo(a, idx);
       if (!info || info.converted == null) return;
       any = true;
@@ -2446,7 +2504,7 @@
       const values = months.map((m) => { const s = idx.get(norm(a.id), m); const v = s ? Calc.parseAmount(s.amount) : null; return v != null && isFinite(v) ? v : null; });
       const tips = months.map((m, i) => `${Calc.monthLabel(m, true)} · ${values[i] != null ? fmtMoney(values[i], own, true) : "no balance"}`);
       const labels = months.map((m) => Calc.monthLabel(m));
-      chart = type === "card"
+      chart = type === "card" || type === "salary"
         ? Charts.bars({ labels, values, tips, fmtTick: fmtTickFor(own), ariaLabel: "Monthly totals" })
         : Charts.line({ labels, values, tips, fmtTick: fmtTickFor(own), ariaLabel: "Balance history" });
     }
@@ -2458,7 +2516,7 @@
           <button type="button" class="icon-btn" data-close aria-label="Close">✕</button>
         </div>
         <div class="card stack">
-          <div class="label">${info ? (type === "card" ? `${Calc.monthLabel(info.month, true)} total` : `Latest · ${Calc.monthLabel(info.month, true)}`) : "No balance yet"}</div>
+          <div class="label">${info ? (type === "card" ? `${Calc.monthLabel(info.month, true)} total` : type === "salary" ? `${Calc.monthLabel(info.month, true)} salary` : `Latest · ${Calc.monthLabel(info.month, true)}`) : "No balance yet"}</div>
           <div class="mid-number ${type === "loan" ? "neg" : ""}">${info ? `${type === "loan" ? "−" : ""}${esc(fmtMoney(info.amount, own, true))}` : "—"}</div>
           ${info && own !== state.displayCur && info.converted != null ? `<div class="muted mono small">≈ ${esc(fmtMoney(info.converted, state.displayCur))}</div>` : ""}
           ${info && info.delta ? `<div class="mono small ${toneOf(type === "loan" ? -info.delta.amount : info.delta.amount)}">${fmtSigned(info.delta.amount, own)} ${fmtPct(info.delta.pct)} vs ${Calc.monthLabel(Calc.shiftMonth(info.month, -1))}</div>` : ""}
@@ -2721,7 +2779,7 @@
     const a = acct || { type: "current", currency: "ILS", owner: state.me.name, updater: state.me.name, active: true };
     const type = lower(a.type) || "current";
     const names = personNames();
-    const linkable = state.accounts.filter((x) => isActive(x) && lower(x.type) !== "card" && x.id !== a.id);
+    const linkable = state.accounts.filter((x) => isActive(x) && !isFlow(x) && x.id !== a.id);
     const cur = norm(a.currency).toUpperCase() || "ILS";
     const showIf = (field) => `data-only="${ONLY_FOR[field].join(" ")}" ${ONLY_FOR[field].includes(type) ? "" : "hidden"}`;
 
@@ -3182,7 +3240,7 @@
     const isNew = !goal;
     const g = goal || { currency: state.displayCur, account_ids: "", active: true };
     const chosen = new Set(Calc.splitIds(g.account_ids).map(lower));
-    const accts = state.accounts.filter((a) => (isActive(a) || chosen.has(lower(a.id))) && lower(a.type) !== "card")
+    const accts = state.accounts.filter((a) => (isActive(a) || chosen.has(lower(a.id))) && !isFlow(a))
       .sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname)));
     // Accounts already linked to another active goal (allowed, but worth a warning).
     const otherUse = new Map();

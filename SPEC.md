@@ -35,7 +35,7 @@ Create these tabs with these exact headers if they are missing; never overwrite 
 Rules:
 
 - `Accounts.id` is a short unique slug. `owner` is one of the two person names from Settings, or `Joint`.
-- `type` is one of: current, savings, investment, crypto, long_term, loan, home, card.
+- `type` is one of: current, savings, investment, crypto, long_term, loan, home, card. *(Added after Stage 4: study_fund (change 13) and salary (change 14).)*
 - `currency` is ILS, USD or EUR.
 - `updater` is the person responsible for updating that account. `update_day` is the day of month it is due. `update_month` is only for type home, which is due once a year.
 - `linked_account` is only for cards (the account id that pays the card), for display only. `monthly_payment` is only for loans.
@@ -156,6 +156,8 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 12. **One-month exceptions for fixed payments and income** (requested after change 11). A Fixed row with `one_month` = `yes` sets the amount for its `from_month` only. The regular amount history is unchanged and applies again the next month, and 0 means nothing that month. Set it by tapping a fixed payment in the Spending month list (for that month), or from Manage → payment → "One month only" (any month, including future ones). Exceptions are listed there with Delete. Editing a payment's details updates its exception rows too. Exceptions are marked "this month only" in the Spending list. They don't apply to loan payment history.
 
 13. **Pension and Keren Hishtalmut types** (requested after change 12). New account type `study_fund`, shown as "Keren Hishtalmut". The existing `long_term` type is now shown as "Pension" (provident funds stay under it). Both are assets in the long-term total and never in reachable money. Long-term total = current + savings + investment + crypto + long_term + study_fund + home − loan. Each has its own card in the Long-term view and its own colour in the Trends stack: study_fund is violet `#9085e9`, and the 8-colour set still passes the palette validator against the panel colour. Bulk add accepts `pension` and `keren_hishtalmut` (also `hishtalmut`, `keren`) as well as the stored names.
+
+14. **Salary and monthly savings** (requested after change 13). New account type `salary`, a monthly flow like `card`. Each month the net salary that arrived is entered as a snapshot under that month (Update form or paste box), with due reminders like any account. Salary never counts in reachable money, the long-term total or "incomplete month" checks. Accounts group totals leave it out, and it can't be linked to goals or cards. On the Spending tab, a **My savings** card for the selected month shows: **saved** = (salary + fixed income) − (cards + fixed payments + loan payments), all at the personal share (own in full, Joint 50%, the other person's left out; loan payments count as spending); the **share of income saved**; the year's average; and a bar chart of saved per month (negative months below zero). **Balance check:** when the month and the one before both have every expected balance, it shows how your long-term total changed (both months at this month's rate, personal share) and the difference from "saved", explained as untracked money (cash, transfers, Bit), investment and pension gains, loan principal and timing. With balances missing, it says the check needs them instead of showing a misleading number. Without a salary account, the card explains how to add one.
 
 ## How to work
 
