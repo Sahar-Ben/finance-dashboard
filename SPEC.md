@@ -173,6 +173,8 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 
 21. **Why is it unexplained? Per account** (requested after change 20). Salary accounts ("Paid into") and loans ("Paid from") can now be linked to a bank account, like cards ("Paid from") and fixed payments (their bank account); Bulk add accepts a linked account for these types. When money is unexplained, **"Why? Show it per account"** lists each of one's bank, savings and investment accounts (own or joint) for the month, in full amounts. It shows the **actual change** (balance this month − last month), the **expected change** = salary in − card totals − fixed payments + fixed income − loan payments + new loan money + explained transfers in/out, each going to its linked account, and the **difference** ("✓ matches" or "unexplained"). Flows with no linked account are listed as "not linked to any account yet", with where to set the link.
 
+22. **Not due yet is not missing** (requested after change 21). In the current month, an account whose update day has not arrived yet does not make the month incomplete. Its latest earlier balance stands in for the totals, and the Overview lists it under **Not due yet** ("due 16 Oct · using Sep 26"). From its update day on, a missing balance counts as missing again. Homes keep their yearly rule. The Savings balance check does not compare a month while an account is still not due, and it says which account and day it is waiting for.
+
 ## How to work
 
 Build one stage at a time. After each stage: update SPEC.md, commit, merge to main, and give a plain-language test checklist. Wait for the go-ahead before the next stage.

@@ -185,7 +185,12 @@
   // An active non-card account is expected from its first snapshot onward (or, if it has none yet,
   // from the latest month with balances); a missing expected balance marks the month incomplete.
   // `shareOf(account)` (optional) weights each account, e.g. 0.5 for joint; accounts weighted 0 are ignored.
-  function monthTotals(accounts, idx, month, display, rates, latestBalanceMonth, rateMonth, shareOf) {
+  // In the current month, an account whose update day hasn't come yet is not missing: its latest
+  // earlier balance is carried forward and it is listed in `notDue` instead.
+  function monthTotals(accounts, idx, month, display, rates, latestBalanceMonth, rateMonth, shareOf, now) {
+    now = now || new Date();
+    const nowM = currentMonth(now);
+    const notDue = [];
     const byType = {};
     TYPES.forEach((t) => { byType[t] = 0; });
     const counts = {};
@@ -201,7 +206,14 @@
       if (!TYPES.includes(type)) return;
       const share = shareOf ? shareOf(a) : 1;
       if (!share) return;
-      const b = balanceFor(a, month, idx);
+      let b = balanceFor(a, month, idx);
+      if (!b && month === nowM && !FLOW_TYPES.includes(type) && isActive(a) && notDueYet(a, now)) {
+        const prev = (idx.byAccount.get(norm(a.id)) || []).filter((x) => x.month < month);
+        const last = prev[prev.length - 1];
+        notDue.push({ account: a, from: last ? last.month : null });
+        if (!last) return;
+        b = { snap: last.snap, month: last.month, carried: true };
+      }
       if (!b) {
         if (FLOW_TYPES.includes(type) || !isActive(a)) return;
         const first = idx.firstMonth.get(norm(a.id));
@@ -226,7 +238,7 @@
     const assets = ASSET_TYPES.reduce((s, t) => s + byType[t], 0);
     const longTerm = assets - byType.loan;
     return {
-      month, reachable, longTerm, assets, byType, counts, cards, cardCount, salary, missing, unconverted,
+      month, reachable, longTerm, assets, byType, counts, cards, cardCount, salary, missing, unconverted, notDue,
       hasBalances: balances > 0,
       incomplete: missing.length > 0 || unconverted.length > 0,
     };
@@ -252,6 +264,14 @@
     return out;
   }
 
+  const clampDay = (d, month) => Math.min(Math.max(1, Number(d) || 1), Number(lastDayOfMonth(month).slice(8)));
+
+  // True when a monthly account's update day for the current month is still ahead.
+  function notDueYet(a, now) {
+    if (lower(a.type) === "home") return false;
+    return now.getDate() < clampDay(a.update_day, currentMonth(now));
+  }
+
   // ---------- due list ----------
 
   // Accounts the person updates whose due date has passed with no snapshot yet.
@@ -263,7 +283,6 @@
     const day = now.getDate();
     const me = lower(personName);
     const out = [];
-    const clampDay = (d, month) => Math.min(Math.max(1, Number(d) || 1), Number(lastDayOfMonth(month).slice(8)));
     accounts.forEach((a) => {
       if (!isActive(a) || lower(a.updater) !== me) return;
       const id = norm(a.id);
