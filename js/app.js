@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.09-1";
+  const APP_VERSION = "2026.10.09-2";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
@@ -3722,8 +3722,28 @@
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") hiddenAt = Date.now();
-    else if (hiddenAt && Date.now() - hiddenAt > LOCK_AFTER_MS) showLock();
+    else {
+      if (hiddenAt && Date.now() - hiddenAt > LOCK_AFTER_MS) showLock();
+      checkForUpdate();
+    }
   });
+
+  // iPhones keep an old copy of the page. Fetch the page fresh and, if it names a newer version,
+  // reload under a new address so the new files load. Tried once per version to avoid loops.
+  async function checkForUpdate() {
+    if (!navigator.onLine) return;
+    try {
+      const res = await fetch(`${location.pathname}?fresh=${Date.now()}`, { cache: "no-store" });
+      if (!res.ok) return;
+      const m = (await res.text()).match(/js\/app\.js\?v=([\w.-]+)/);
+      if (!m || m[1] === APP_VERSION) return;
+      let tried = null;
+      try { tried = sessionStorage.getItem("fd.updateTried"); } catch (_) { /* ignore */ }
+      if (tried === m[1]) return;
+      try { sessionStorage.setItem("fd.updateTried", m[1]); } catch (_) { /* ignore */ }
+      location.replace(`${location.pathname}?v=${encodeURIComponent(m[1])}${location.hash}`);
+    } catch (_) { /* offline or blocked: keep the current version */ }
+  }
 
   async function lockSettingsHtml() {
     if (!(await lockSupported())) return "";
@@ -3763,6 +3783,7 @@
 
   function boot() {
     updateOnline();
+    checkForUpdate();
     if (!(window.FD_CONFIG && window.FD_CONFIG.GOOGLE_CLIENT_ID)) return renderNotConfigured();
     loadToken();
     if (state.token && state.email) {

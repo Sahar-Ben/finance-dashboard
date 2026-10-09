@@ -177,6 +177,8 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 
 23. **To do** (requested after change 22). The Overview's due card is called **To do** and lists only balances whose date has passed; before that an account counts as up to date. An account with no update day is due from the 1st of the month, and a home with no update month is due when the year has no value yet. Accounts with no "updated by" person appear in the To do of everyone who holds a share in them (owner or joint).
 
+24. **The app updates itself** (requested after change 23, when an iPhone kept showing an old version). When the app opens or comes back to the screen, it fetches the page fresh. If the page names a newer version than the one running, the app reloads once under a new address so the new files load.
+
 ## How to work
 
 Build one stage at a time. After each stage: update SPEC.md, commit, merge to main, and give a plain-language test checklist. Wait for the go-ahead before the next stage.
