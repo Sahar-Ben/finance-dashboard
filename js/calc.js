@@ -277,19 +277,22 @@
   // Accounts the person updates whose due date has passed with no snapshot yet.
   // Monthly accounts: due this month once update_day has passed; earlier months since the account's
   // first snapshot that are still empty are overdue. Home: due once a year from update_month/update_day.
-  function dueList(accounts, idx, personName, now) {
+  // No update day means due from the 1st; a home with no update month is due when this year has no value.
+  // Accounts with no updater go to whoever `noUpdater(account)` accepts (optional).
+  function dueList(accounts, idx, personName, now, noUpdater) {
     now = now || new Date();
     const nowM = currentMonth(now);
     const day = now.getDate();
     const me = lower(personName);
     const out = [];
     accounts.forEach((a) => {
-      if (!isActive(a) || lower(a.updater) !== me) return;
+      if (!isActive(a)) return;
+      if (norm(a.updater) ? lower(a.updater) !== me : !(noUpdater && noUpdater(a))) return;
       const id = norm(a.id);
       const type = lower(a.type);
       if (type === "home") {
-        const um = Number(a.update_month);
-        if (!(um >= 1 && um <= 12)) return;
+        let um = Number(a.update_month);
+        if (!(um >= 1 && um <= 12)) um = 1;
         const dueMonth = `${nowM.slice(0, 4)}-${pad(um)}`;
         if (nowM < dueMonth || (nowM === dueMonth && day < clampDay(a.update_day, dueMonth))) return;
         const done = (idx.byAccount.get(id) || []).some((x) => x.month >= dueMonth);

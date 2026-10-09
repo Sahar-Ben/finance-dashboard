@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.08-1";
+  const APP_VERSION = "2026.10.09-1";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
@@ -1141,7 +1141,7 @@
         if (!t.hasBalances) out.push(`no bank, savings or investment balance at all for ${Calc.monthLabel(mm, true)}`);
         t.missing.forEach((a) => out.push(`${norm(a.nickname) || a.id}: no balance for ${Calc.monthLabel(mm, true)} (updated by ${norm(a.updater) || "—"})`));
         t.unconverted.forEach((a) => out.push(`${norm(a.nickname) || a.id}: exchange rate missing for ${Calc.monthLabel(mm, true)}`));
-        t.notDue.forEach((n) => out.push(`${norm(n.account.nickname) || n.account.id}: not due until the ${norm(n.account.update_day)}th of ${Calc.monthLabel(mm, true)}`));
+        t.notDue.forEach((n) => out.push(`${norm(n.account.nickname) || n.account.id}: not due until ${norm(n.account.update_day)} ${Calc.monthLabel(mm, true)}`));
       });
       return out;
     };
@@ -2034,13 +2034,6 @@
         <a class="btn block" href="#update">Add the missing balances</a>
       </div>` : "";
 
-    // Accounts whose update day this month is still ahead: not missing, their last balance stands in.
-    const notDue = t.hasBalances && t.notDue && t.notDue.length ? `
-      <div class="card stack">
-        <div class="label">Not due yet</div>
-        <p class="muted small">These accounts are updated later this month. Until then the totals use their last balance.</p>
-        <ul class="plain-list">${t.notDue.map((n) => `<li><span>${accountName(n.account)}</span><span class="mono muted">due ${esc(n.account.update_day)} ${Calc.monthLabel(month).split(" ")[0]}${n.from ? ` · using ${esc(Calc.monthLabel(n.from))}` : " · no balance yet"}</span></li>`).join("")}</ul>
-      </div>` : "";
 
     // A home is a yearly estimate: say which month its value comes from instead of "no change".
     const homeNote = (m) => {
@@ -2125,7 +2118,6 @@
         ${rateNoticesHtml(months.all)}
         ${hero}
         ${missing}
-        ${notDue}
         ${typeCards || cardsCard ? `<div><div class="group-title"><span class="label">Long-term view</span><span class="label">vs ${Calc.monthLabel(prevM)}</span></div>
         <p class="muted small" style="margin:-4px 4px 10px">Bars show each part's share of everything you own (your share of joint items).</p><div class="type-grid">${typeCards}${cardsCard}</div></div>` : ""}
         ${loansCard}
@@ -3476,7 +3468,7 @@
 
   function dueItems() {
     if (!state.me) return [];
-    return Calc.dueList(state.accounts, Calc.indexSnapshots(state.snapshots), state.me.name, new Date());
+    return Calc.dueList(state.accounts, Calc.indexSnapshots(state.snapshots), state.me.name, new Date(), (a) => myShare(a) > 0);
   }
 
   function openManualFor(accountId, month) {
@@ -3502,7 +3494,7 @@
     const over = due.filter((d) => d.overdue).length;
     return `
       <div class="card notice stack">
-        <div class="spread"><div class="label">Due now · ${due.length}</div>${over ? `<span class="chip neg">${over} overdue</span>` : ""}</div>
+        <div class="spread"><div class="label">To do · ${due.length}</div>${over ? `<span class="chip neg">${over} overdue</span>` : ""}</div>
         <div class="stack" style="gap:8px">${due.slice(0, DUE_SHOWN).map(item).join("")}</div>
         ${due.length > DUE_SHOWN ? `<details class="due-more"><summary class="link-btn">Show all ${due.length}</summary>
           <div class="stack" style="gap:8px; margin-top:8px">${due.slice(DUE_SHOWN).map((d, i) => item(d, i + DUE_SHOWN)).join("")}</div></details>` : ""}
