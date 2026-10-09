@@ -179,6 +179,8 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 
 24. **The app updates itself** (requested after change 23, when an iPhone kept showing an old version). When the app opens or comes back to the screen, it fetches the page fresh. If the page names a newer version than the one running, the app reloads once under a new address so the new files load.
 
+25. **Collapsible account groups** (requested after change 24). On Accounts, each group (by institution, country or owner) starts collapsed, showing its name, count and net total. Tapping the group's title opens or closes it, and an arrow shows which. Opened groups stay open while the app is open. Inactive accounts work the same way.
+
 ## How to work
 
 Build one stage at a time. After each stage: update SPEC.md, commit, merge to main, and give a plain-language test checklist. Wait for the go-ahead before the next stage.

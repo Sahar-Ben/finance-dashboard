@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.09-2";
+  const APP_VERSION = "2026.10.09-3";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
@@ -32,6 +32,7 @@
   };
 
   const state = {
+    acctOpen: new Set(), // account groups opened on the Accounts tab
     gisReady: false,
     token: null,
     tokenExp: 0,
@@ -734,6 +735,10 @@
       </div>`;
     Charts.bind($screen);
     bindCurSeg();
+    // Groups start collapsed; the ones opened stay open while the app is open.
+    $screen.querySelectorAll(".acct-group").forEach((d) => d.addEventListener("toggle", () => {
+      if (d.open) state.acctOpen.add(d.dataset.key); else state.acctOpen.delete(d.dataset.key);
+    }));
     $screen.querySelectorAll("[data-acct]").forEach((b) => b.addEventListener("click", () => {
       const a = state.accounts.find((x) => String(x.id) === b.dataset.acct);
       if (a) openAccountDetail(a);
@@ -2784,17 +2789,20 @@
       ${!active.length ? `<div class="card empty stack" style="margin-top:16px"><p class="muted">No accounts yet. Add one, or paste many at once with Bulk add.</p></div>` : ""}
       ${active.length ? groups.map((g) => {
         const net = groupNet(g.list, idx);
+        const open = state.acctOpen.has(`${grouping}|${g.name}`);
         return `
-        <div class="group-title">
-          <span class="label">${esc(g.name)} · ${g.list.length}</span>
-          <span class="label">${net != null ? `net ${esc(fmtMoney(net, cur))}` : ""}</span>
-        </div>
-        <div class="stack">${g.list.length ? sortList(g.list).map((a) => acctCard(a, idx)).join("")
-          : `<p class="muted small" style="padding:0 4px">No accounts.</p>`}</div>`;
+        <details class="acct-group" data-key="${esc(`${grouping}|${g.name}`)}"${open ? " open" : ""}>
+          <summary class="group-title">
+            <span class="label"><span class="chev-toggle" aria-hidden="true">›</span> ${esc(g.name)} · ${g.list.length}</span>
+            <span class="label">${net != null ? `net ${esc(fmtMoney(net, cur))}` : ""}</span>
+          </summary>
+          <div class="stack">${g.list.length ? sortList(g.list).map((a) => acctCard(a, idx)).join("")
+            : `<p class="muted small" style="padding:0 4px">No accounts.</p>`}</div>
+        </details>`;
       }).join("") : ""}
       ${inactive.length ? `
-        <details style="margin-top:28px">
-          <summary class="group-title"><span class="label">Inactive (${inactive.length}) ▾</span></summary>
+        <details class="acct-group" style="margin-top:28px">
+          <summary class="group-title"><span class="label"><span class="chev-toggle" aria-hidden="true">›</span> Inactive · ${inactive.length}</span></summary>
           <div class="stack">${inactive.map((a) => acctCard(a, idx)).join("")}</div>
         </details>` : ""}
       ${active.length ? `<p class="muted small" style="margin-top:16px">Latest balance of each account in ${cur}, converted with that month's rate. Group totals are net (loans subtracted) and leave out cards.</p>` : ""}`;
@@ -2807,6 +2815,10 @@
       renderAccounts();
     });
     bindCurSeg();
+    // Groups start collapsed; the ones opened stay open while the app is open.
+    $screen.querySelectorAll(".acct-group").forEach((d) => d.addEventListener("toggle", () => {
+      if (d.open) state.acctOpen.add(d.dataset.key); else state.acctOpen.delete(d.dataset.key);
+    }));
     $screen.querySelectorAll("[data-acct]").forEach((b) => b.addEventListener("click", () => {
       const a = state.accounts.find((x) => String(x.id) === b.dataset.acct);
       if (a) openAccountDetail(a);
