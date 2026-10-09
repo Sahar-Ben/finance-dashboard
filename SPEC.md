@@ -187,6 +187,14 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 
 28. **View switch: Me / the other person / Both** (requested after change 27). Overview, Banks, Spending (with Savings) and Trends have a switch next to the currency switch, labelled ME, the other person's name (from Settings) and BOTH, remembered on the device (`fd.view`). Me: own accounts in full + 50% of joint (as before). Other person: the same rule for them. Both: every account and payment in full. Labels follow the view ("My / Name's / Our reachable money", "your / Name's 50%"). Savings counts the explanations of the person shown, or of both; an own transfer's effect is recomputed for the view (moved × (share of To − share of From)), so in Both a move between household accounts counts 0. Adding explanations is only offered in Me. Entering data, To do and the Accounts tab do not change with the view.
 
+29. **UX pass** (requested after change 28).
+    - **Update is a guided flow.** Opening Update starts on the next balance to do (account by account, oldest month first). The form shows the account name, month, type and bank, the last balance, and a large Balance field that gets the cursor. **Save & next** saves and moves to the next balance, with a toast showing how many are left. **Skip for now** leaves that balance until "Show skipped again" (skips last while the app is open). Account, month and date are behind "Change account, month or date", which is open when nothing is due. The month change sets the as-of date (today for this month, else the month's last day) unless the date was edited. Below the form, **Still to do** lists the remaining accounts; tapping one jumps to its oldest missing month. A button that opens Update for a specific account keeps that account.
+    - **Overview To do** is a short card: how many balances and accounts, the next one, a **Start updating** button, and the full list behind "See the list". The Update badge shows the number of balances. The view and currency switches share one row under the title, and the month selector sits on its own row.
+    - **Spending** has two views, **SPENDING** (spending, fixed payments, cards) and **SAVINGS**, remembered on the device (`fd.spTab`).
+    - **Sub-screens** (Update, Fixed payments, Goals) show a "‹ Back" link above the title to the tab they were opened from.
+    - **More** links to Fixed payments and Goals. People, emails and default currency fold into "People & sign-in".
+    - **Trends**: a month with no bank balance is a gap in Reachable money, not ₪0.
+
 ## How to work
 
 Build one stage at a time. After each stage: update SPEC.md, commit, merge to main, and give a plain-language test checklist. Wait for the go-ahead before the next stage.

@@ -426,3 +426,12 @@ details summary::-webkit-details-marker { display: none; }
 .acct-group > summary.group-title { padding: 6px 0; min-height: 32px; align-items: center; }
 .chev-toggle { display: inline-block; margin-right: 6px; transition: transform .15s ease; }
 .acct-group[open] .chev-toggle { transform: rotate(90deg); }
+
+/* Sub-screen back link, above the title */
+.back-link { display: inline-flex; align-items: center; min-height: 44px; margin: -10px 0 -4px -2px; padding: 0 2px;
+  color: var(--accent-2); text-decoration: none; font-size: 15px; font-weight: 500; }
+.amount-input { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 28px !important; padding: 14px 16px !important; letter-spacing: 0.02em; }
+details.fold > summary { cursor: pointer; }
+details.fold[open] > summary .chev { transform: rotate(90deg); }
+details.fold > summary .chev { transition: transform .15s ease; }
+#lock-settings:empty { display: none; }

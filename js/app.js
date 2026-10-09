@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.09-6";
+  const APP_VERSION = "2026.10.10-1";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
@@ -533,6 +533,15 @@
     fixed: { tab: "cards", render: () => renderFixed() },
   };
 
+  // Header of a sub-screen: a "‹ Back to …" link above the title instead of a button beside it.
+  function subHead(title, backTab) {
+    const t = TABS.find((x) => x.id === backTab) || TABS[0];
+    return `
+      <div class="page-head">
+        <div><a class="back-link" href="#${t.id}">‹ ${esc(t.label)}</a><h1>${title}</h1></div>
+      </div>`;
+  }
+
   function currentRoute() {
     const h = location.hash.replace("#", "");
     if (SUBSCREENS[h]) return h;
@@ -553,6 +562,13 @@
     $screen.classList.remove("no-tabs");
     $tabbar.innerHTML = `<div class="tabs">${TABS.map((t) => `
       <button data-tab="${t.id}" ${t.id === tab ? 'aria-current="page"' : ""}>${ICONS[t.id]}<span>${t.label}</span></button>`).join("")}</div>`;
+    if (!SUBSCREENS[r]) state.lastTab = r; // where a sub-screen's "Back" returns to
+    // Opening Update afresh starts on the next balance to do, unless a button chose an account.
+    if (r === "update" && state.prevRoute !== "update") {
+      if (!state.manualPinned) { state.manualDraft = null; state.updateMode = "manual"; }
+      state.manualPinned = false;
+    }
+    state.prevRoute = r;
     if (SUBSCREENS[r]) SUBSCREENS[r].render();
     else TABS.find((t) => t.id === tab).render();
     window.scrollTo(0, 0);
@@ -1004,7 +1020,7 @@
     const cardIds = new Set(cards.map((a) => norm(a.id)));
     const head = `
       <div class="page-head">
-        <div><div class="label">Cards & fixed payments</div><h1>Spending</h1></div>
+        <div><div class="label">Money out & saved</div><h1>Spending</h1></div>
       </div>
       <div class="cur-row">${viewSegHtml()}${curSegHtml()}</div>`;
     const salaries = state.accounts.filter((a) => lower(a.type) === "salary");
@@ -1401,9 +1417,17 @@
       legendHtml = `<span class="key"><i style="background:${SPEND_COLORS.cards}"></i>Cards</span><span class="key"><i style="background:${SPEND_COLORS.fixed}"></i>Fixed payments</span>`;
       chartTips = yearMonths.map((m, i) => `${Calc.monthLabel(m, true)} · ${totals[i] != null ? `${fmtMoney(totals[i], cur)} (cards ${fmtMoney(cardSeries[i] || 0, cur)}, fixed ${fmtMoney(fixedSeriesV[i] || 0, cur)})` : "nothing recorded"}`);
     }
+    // Two views on one tab: what went out (cards, fixed, loans) and what was saved.
+    const spTab = LS.get("fd.spTab") === "savings" ? "savings" : "spending";
+    const tabSeg = `<div class="seg" id="sp-tab">
+        <button type="button" data-sptab="spending" aria-pressed="${spTab === "spending"}">SPENDING</button>
+        <button type="button" data-sptab="savings" aria-pressed="${spTab === "savings"}">SAVINGS</button>
+      </div>`;
     $screen.innerHTML = `${head}
       <div class="stack-lg">
+        ${tabSeg}
         ${sel}
+        ${spTab === "savings" ? savingsHtml : `
         <div class="card hero stack">
           <div class="label">${viewMy()} spending · ${Calc.monthLabel(month, true)}</div>
           <div class="big-number">${esc(fmtMoney(total, cur))}</div>
@@ -1426,7 +1450,6 @@
           })}
           <div class="legend">${legendHtml}${incomeSeries.some((v) => v) ? `<span class="key"><i style="background:${INCOME_COLOR}"></i>Fixed income (below 0)</span>` : ""}</div>
         </div>
-        ${savingsHtml}
         ${fixedCard}
         ${cards.length ? `
         <div class="card stack">
@@ -1441,7 +1464,7 @@
           <div class="group-title"><span class="label">Each card</span></div>
           <div class="stack">${cardItems}</div>
         </div>` : ""}
-        <p class="muted small">Spending never changes reachable money or the long-term total; that money already shows up when it leaves your bank accounts.</p>
+        <p class="muted small">Spending never changes reachable money or the long-term total; that money already shows up when it leaves your bank accounts.</p>`}
       </div>`;
     Charts.bind($screen);
     bindCurSeg();
@@ -1449,7 +1472,14 @@
     $screen.querySelectorAll("[data-fx-month]").forEach((li) => li.addEventListener("click", () => openMonthOverride(li.dataset.fxMonth, month)));
     const exBtn = document.getElementById("sv-explain");
     if (exBtn) exBtn.addEventListener("click", () => openExplain(month, otherM));
-    document.getElementById("sp-view").addEventListener("click", (e) => {
+    document.getElementById("sp-tab").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-sptab]");
+      if (!b || b.dataset.sptab === spTab) return;
+      LS.set("fd.spTab", b.dataset.sptab);
+      renderCards();
+    });
+    const spView = document.getElementById("sp-view");
+    if (spView) spView.addEventListener("click", (e) => {
       const b = e.target.closest("[data-view]");
       if (!b) return;
       LS.set("fd.spendDetail", b.dataset.view);
@@ -1486,10 +1516,7 @@
         </button>`;
     };
     $screen.innerHTML = `
-      <div class="page-head">
-        <div><div class="label">Spending</div><h1>Fixed payments</h1></div>
-        <a class="btn small" href="#cards">Back</a>
-      </div>
+      ${subHead("Fixed payments", state.lastTab || "cards")}
       <div class="stack-lg">
         <p class="muted">Money that leaves a bank account every month outside the cards, like rent, and fixed money you receive, like renting out a parking spot. Loan payments come from each loan's own "Monthly payment".</p>
         <button class="btn primary block" id="fx-add">+ New fixed payment</button>
@@ -1762,7 +1789,8 @@
     const T = range.map((m) => Calc.monthTotals(state.accounts, idx, m, cur, state.rates, latestBal, null, viewShare));
     const labels = range.map((m) => (period === "year" ? MONTHS[Number(m.slice(5)) - 1] : Calc.monthLabel(m)));
     const inc = T.map((t) => t.hasBalances && t.incomplete);
-    const series = (field) => T.map((t) => (t.hasBalances ? t[field] : null));
+    // Reachable money needs a bank balance that month; a month with only a home value is a gap, not ₪0.
+    const series = (field) => T.map((t) => (t.hasBalances && (field !== "reachable" || t.counts.current) ? t[field] : null));
     const tips = (field) => T.map((t, i) => `${Calc.monthLabel(range[i], true)} · ${t.hasBalances ? fmtMoney(t[field], cur) + (inc[i] ? " · incomplete" : "") : "no balances"}`);
     const fmtTick = fmtTickFor(cur);
     const any = T.some((t) => t.hasBalances);
@@ -2009,15 +2037,13 @@
     const head = `
       <div class="page-head">
         <div><div class="label">Hi, ${esc(state.me.name)}</div><h1>Overview</h1></div>
-        <a class="btn primary small badge-host" href="#update">Update${due.length ? `<span class="badge" aria-label="${due.length} due">${due.length}</span>` : ""}</a>
+        <a class="btn primary small badge-host" href="#update">Update${due.length ? `<span class="badge" aria-label="${dueTotal(due)} to do">${dueTotal(due)}</span>` : ""}</a>
       </div>
-      ${viewSegHtml() ? `<div class="cur-row">${viewSegHtml()}</div>` : ""}`;
+      <div class="cur-row">${viewSegHtml()}${curSegHtml()}</div>`;
     const goals = (state.goals || []).filter(goalsActive);
     const goalsSection = goals.length ? `
       <div><div class="group-title"><span class="label">Goals</span><a class="label link" href="#goals">Manage ›</a></div>
         <div class="stack">${goals.map((g) => goalCardHtml(g, true)).join("")}</div></div>` : "";
-    const curSeg = `<div class="seg seg-sm" id="ov-cur">${CURRENCIES.map((c) =>
-      `<button type="button" data-cur="${c}" aria-pressed="${c === cur}">${c}</button>`).join("")}</div>`;
 
     if (!month) {
       $screen.innerHTML = `${head}
@@ -2031,6 +2057,7 @@
           </div>
         </div>`;
       bindDue(due);
+      bindCurSeg();
       return;
     }
 
@@ -2171,7 +2198,7 @@
     $screen.innerHTML = `${head}
       <div class="stack-lg">
         ${dueCardHtml(due)}
-        <div class="row ov-controls">${sel}${curSeg}</div>
+        ${sel}
         ${state.ratesPending ? `<p class="muted small">Fetching exchange rates…</p>` : ""}
         ${rateNoticesHtml(months.all)}
         ${hero}
@@ -2186,13 +2213,7 @@
     document.getElementById("ov-month").addEventListener("change", (e) => go(e.target.value));
     document.getElementById("ov-prev").addEventListener("click", () => go(months.all[months.all.indexOf(month) + 1]));
     document.getElementById("ov-next").addEventListener("click", () => go(months.all[months.all.indexOf(month) - 1]));
-    document.getElementById("ov-cur").addEventListener("click", (e) => {
-      const b = e.target.closest("[data-cur]");
-      if (!b || b.dataset.cur === state.displayCur) return;
-      state.displayCur = b.dataset.cur;
-      LS.set("fd.displayCurrency", state.displayCur);
-      route();
-    });
+    bindCurSeg();
     bindRateNotices(months.all);
     bindDue(due);
     $screen.querySelectorAll("[data-goal]").forEach((b) => b.addEventListener("click", () => { location.hash = "goals"; }));
@@ -2205,10 +2226,7 @@
   function renderUpdate() {
     const mode = state.updateMode === "import" ? "import" : "manual";
     $screen.innerHTML = `
-      <div class="page-head">
-        <div><div class="label">Monthly update</div><h1>${mode === "import" ? "Paste rows" : "Update"}</h1></div>
-        <a class="btn small" href="#overview">Done</a>
-      </div>
+      ${subHead(mode === "import" ? "Paste rows" : "Update", state.lastTab || "overview")}
       <div class="stack-lg">
         <div id="up-body"></div>
         <button type="button" class="link-btn" id="up-switch" style="align-self:center">${mode === "import" ? "‹ Back to one balance" : "Paste many rows at once instead"}</button>
@@ -2446,6 +2464,9 @@
     }
   }
 
+  // One balance at a time. With balances to do, the form opens on the next one (account by account,
+  // oldest month first): "Save & next" moves on, "Skip" leaves it for later. With nothing to do,
+  // the form is free: choose any account, month and date.
   function renderManual() {
     const body = document.getElementById("up-body");
     const meName = lower(state.me.name);
@@ -2453,52 +2474,92 @@
     const isMine = (a) => [lower(a.owner), lower(a.updater)].includes(meName) || lower(a.owner) === lower(JOINT);
     const mine = active.filter(isMine).sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname)));
     const others = active.filter((a) => !isMine(a)).sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname)));
-    const showAll = state.manualShowAll || !mine.length;
-    const keep = state.manualDraft || {};
     const label = (a) => `${norm(a.nickname) || a.id} · ${norm(a.currency).toUpperCase()}`;
     if (!active.length) {
       body.innerHTML = `<div class="card empty stack"><p class="muted">Add accounts first, on the Accounts tab.</p><a class="btn block" href="#accounts">Go to Accounts</a></div>`;
       return;
     }
-    // What still needs a balance: tapping one fills the form below with that account and month.
+    const skipped = state.updSkip || (state.updSkip = new Set());
     const due = dueItems();
-    const isPicked = (d) => keep.account_id === d.account.id && d.months.includes(keep.month || Calc.currentMonth());
-    const todo = due.length ? `
+    const key = (id, m) => `${id}|${m}`;
+    const queue = [];
+    due.forEach((d) => d.months.forEach((m) => { if (!skipped.has(key(d.account.id, m))) queue.push({ account: d.account, month: m }); }));
+    const total = dueTotal(due);
+    const asOf = (m) => (m === Calc.currentMonth() ? Calc.today() : Calc.lastDayOfMonth(m));
+    // Fresh visit (or after a save/skip): start on the next balance to do.
+    if (!state.manualDraft || !state.manualDraft.account_id) {
+      const next = queue[0];
+      state.manualDraft = next ? { account_id: next.account.id, month: next.month, as_of_date: asOf(next.month) }
+        : { ...(state.manualDraft || {}) };
+    }
+    const keep = state.manualDraft;
+    const keepMonth = keep.month || Calc.currentMonth();
+    const inQueue = queue.some((q) => q.account.id === keep.account_id && q.month === keepMonth);
+    const showAll = state.manualShowAll || !mine.length || (keep.account_id && !mine.some((a) => a.id === keep.account_id));
+    const pos = inQueue ? queue.findIndex((q) => q.account.id === keep.account_id && q.month === keepMonth) : -1;
+
+    const progress = total ? `
       <div class="card notice stack">
-        <div class="spread"><div class="label">To do · ${dueTotal(due)}</div><span class="muted small">Tap one to fill it in</span></div>
-        <div class="stack" style="gap:8px">${due.map((d, i) => `
-          <button type="button" class="due-item${isPicked(d) ? " picked" : ""}" data-pick="${i}">
-            <span><span class="due-name">${accountName(d.account)}</span>
-              <span class="muted small mono">${esc(isPicked(d) && d.months.length > 1 ? `${Calc.monthLabel(keep.month, true)} · ${d.months.length - 1} more after this` : dueWhen(d))}</span></span>
-            <span class="row">${isPicked(d) ? `<span class="chip accent">Selected</span>` : d.overdue ? `<span class="chip neg">Overdue</span>` : `<span class="chip warn">Due</span>`}</span>
-          </button>`).join("")}</div>
+        <div class="spread"><div class="label">To do</div><span class="mono small">${queue.length} left${skipped.size ? ` · ${skipped.size} skipped` : ""}</span></div>
+        <p class="muted small">${inQueue ? "Enter each balance and tap Save & next. The app moves to the next one for you." : "Pick any balance below, or tap Back to the list."}</p>
+        ${skipped.size ? `<button type="button" class="link-btn" id="man-unskip" style="align-self:flex-start">Show skipped again</button>` : ""}
       </div>` : `
       <div class="card stack"><div class="spread"><div class="label">To do</div><span class="chip pos">All up to date</span></div>
-        <p class="muted small">Nothing is due right now. You can still enter any balance below.</p></div>`;
-    body.innerHTML = `${todo}
+        <p class="muted small">Nothing is due. You can still enter or correct any balance below.</p></div>`;
+
+    const rest = due.filter((d) => d.months.some((m) => !skipped.has(key(d.account.id, m))));
+    const list = rest.length > (inQueue ? 1 : 0) ? `
+      <div class="stack">
+        <div class="group-title" style="margin-top:8px"><span class="label">Still to do · ${rest.length} account${rest.length === 1 ? "" : "s"}</span></div>
+        ${rest.map((d) => {
+          const months = d.months.filter((m) => !skipped.has(key(d.account.id, m)));
+          const cur = d.account.id === keep.account_id;
+          return `
+          <button type="button" class="due-item${cur ? " picked" : ""}" data-pick="${esc(d.account.id)}" data-month="${esc(months[0])}">
+            <span><span class="due-name">${accountName(d.account)}</span>
+              <span class="muted small mono">${months.length === 1 ? Calc.monthLabel(months[0], true) : `${months.length} months · from ${Calc.monthLabel(months[0], true)}`}</span></span>
+            <span class="row">${cur ? `<span class="chip accent">Now</span>` : d.overdue ? `<span class="chip neg">Overdue</span>` : `<span class="chip warn">Due</span>`}</span>
+          </button>`;
+        }).join("")}
+      </div>` : "";
+
+    body.innerHTML = `${progress}
       <form id="man-form" class="card stack-lg" novalidate style="margin-top:16px">
-        <div class="field"><label class="label" for="man-acct">Account</label>
-          <select id="man-acct">
-            <optgroup label="Mine & joint">${options(mine.map((a) => [a.id, label(a)]), keep.account_id)}</optgroup>
-            ${showAll && others.length ? `<optgroup label="Other accounts">${options(others.map((a) => [a.id, label(a)]), keep.account_id)}</optgroup>` : ""}
-          </select>
-          ${others.length ? `<button type="button" class="link-btn" id="man-all">${showAll ? "Show only mine & joint" : `Show all accounts (${others.length} more)`}</button>` : ""}
+        <div class="stack" style="gap:4px">
+          <div class="label">${inQueue ? `Next up${queue.length > 1 ? ` · ${pos + 1} of ${queue.length}` : ""}` : "Balance"}</div>
+          <h2 id="man-title"></h2>
+          <div class="muted small mono" id="man-sub"></div>
         </div>
-        <div class="field-row">
-          <div class="field"><label class="label" for="man-month">Month</label><input id="man-month" type="month" value="${esc(keep.month || Calc.currentMonth())}"></div>
-          <div class="field"><label class="label" for="man-date">As-of date</label><input id="man-date" type="date" value="${esc(keep.as_of_date || Calc.today())}"></div>
-        </div>
-        <div class="field"><label class="label" for="man-amount">Amount <span id="man-cur" class="chip accent" style="margin-left:6px"></span></label>
-          <input id="man-amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0" value="${esc(keep.amount || "")}"></div>
+        <div class="field"><label class="label" for="man-amount">Balance <span id="man-cur" class="chip accent" style="margin-left:6px"></span></label>
+          <input id="man-amount" class="amount-input" type="text" inputmode="decimal" autocomplete="off" placeholder="0" value="${esc(keep.amount || "")}"></div>
         <div id="man-context" class="stack"></div>
         <p class="err-text" id="man-err"></p>
-        <button class="btn primary block" type="submit" id="man-save">Save balance</button>
-      </form>`;
+        <button class="btn primary block" type="submit" id="man-save">${inQueue && queue.length > 1 ? "Save & next" : "Save balance"}</button>
+        ${inQueue ? `<button type="button" class="btn ghost block" id="man-skip">Skip for now</button>` : ""}
+        <details class="calc" ${inQueue ? "" : "open"}>
+          <summary class="link-btn">Change account, month or date</summary>
+          <div class="stack" style="margin-top:12px">
+            <div class="field"><label class="label" for="man-acct">Account</label>
+              <select id="man-acct">
+                <optgroup label="Mine & joint">${options(mine.map((a) => [a.id, label(a)]), keep.account_id)}</optgroup>
+                ${showAll && others.length ? `<optgroup label="Other accounts">${options(others.map((a) => [a.id, label(a)]), keep.account_id)}</optgroup>` : ""}
+              </select>
+              ${others.length ? `<button type="button" class="link-btn" id="man-all">${showAll ? "Show only mine & joint" : `Show all accounts (${others.length} more)`}</button>` : ""}
+            </div>
+            <div class="field-row">
+              <div class="field"><label class="label" for="man-month">Month</label><input id="man-month" type="month" value="${esc(keepMonth)}"></div>
+              <div class="field"><label class="label" for="man-date">As-of date</label><input id="man-date" type="date" value="${esc(keep.as_of_date || asOf(keepMonth))}"></div>
+            </div>
+          </div>
+        </details>
+      </form>
+      ${list}`;
     const $acct = document.getElementById("man-acct");
     const $month = document.getElementById("man-month");
     const $amount = document.getElementById("man-amount");
     const $date = document.getElementById("man-date");
     let confirmedLarge = false;
+    let dateTouched = false;
     const draft = () => ({ account_id: $acct.value, month: $month.value, amount: $amount.value, as_of_date: $date.value });
 
     const check = () => {
@@ -2510,42 +2571,53 @@
     const updateContext = () => {
       state.manualDraft = draft();
       confirmedLarge = false;
-      document.getElementById("man-save").textContent = "Save balance";
+      document.getElementById("man-save").textContent = inQueue && queue.length > 1 ? "Save & next" : "Save balance";
       const a = state.accounts.find((x) => x.id === $acct.value);
       const cur = a ? norm(a.currency).toUpperCase() : "";
       document.getElementById("man-cur").textContent = cur;
+      const m = Calc.normMonth($month.value);
+      document.getElementById("man-title").textContent = a ? (norm(a.nickname) || a.id) : "Choose an account";
+      document.getElementById("man-sub").textContent = a
+        ? [m ? Calc.monthLabel(m, true) : "", TYPE_LABEL[lower(a.type)] || a.type, norm(a.institution)].filter(Boolean).join(" · ") : "";
       const row = check();
       const z = row.resolved;
       const bits = [];
-      const m = Calc.normMonth($month.value);
       if (a && m) {
         const idx = Calc.indexSnapshots(state.snapshots);
-        const prev = idx.get(a.id, Calc.shiftMonth(m, -1));
-        bits.push(prev ? `<span class="muted small mono">${Calc.monthLabel(Calc.shiftMonth(m, -1))}: ${fmtMoney(Calc.parseAmount(prev.amount), cur, true)}</span>`
-          : `<span class="muted small">No balance for ${Calc.monthLabel(Calc.shiftMonth(m, -1))}.</span>`);
+        const before = (idx.byAccount.get(norm(a.id)) || []).filter((x) => x.month < m);
+        const last = before[before.length - 1];
+        bits.push(last ? `<span class="muted small mono">Last balance: ${Calc.monthLabel(last.month)} · ${fmtMoney(Calc.parseAmount(last.snap.amount), cur, true)}</span>`
+          : `<span class="muted small">No earlier balance for this account.</span>`);
         const ex = idx.get(a.id, m);
-        if (ex) bits.push(`<span class="chip warn">A balance for ${Calc.monthLabel(m)} exists (${esc(fmtMoney(Calc.parseAmount(ex.amount), cur, true))}) — saving replaces it</span>`);
+        if (ex) bits.push(`<span class="chip warn">${Calc.monthLabel(m)} already has ${esc(fmtMoney(Calc.parseAmount(ex.amount), cur, true))} — saving replaces it</span>`);
       }
       if (z && z.delta && $amount.value.trim()) {
         bits.push(`<span class="mono small ${toneOf(z.delta.amount)}">Change: ${fmtSigned(z.delta.amount, cur)} ${fmtPct(z.delta.pct)}${z.large ? " · large change" : ""}</span>`);
       }
       document.getElementById("man-context").innerHTML = bits.join("");
     };
+    $date.addEventListener("input", () => { dateTouched = true; });
+    $month.addEventListener("input", () => { const m = Calc.normMonth($month.value); if (m && !dateTouched) $date.value = asOf(m); });
     [$acct, $month, $amount, $date].forEach((el) => el.addEventListener("input", updateContext));
     $acct.addEventListener("change", updateContext);
     updateContext();
-    body.querySelectorAll("[data-pick]").forEach((b) => b.addEventListener("click", () => {
-      const d = due[Number(b.dataset.pick)];
-      if (!mine.some((a) => a.id === d.account.id)) state.manualShowAll = true;
-      state.manualDraft = {
-        account_id: d.account.id, month: d.month,
-        as_of_date: d.month === Calc.currentMonth() ? Calc.today() : Calc.lastDayOfMonth(d.month),
-      };
+    const focusAmount = () => { $amount.focus({ preventScroll: true }); };
+    if (inQueue) focusAmount();
+
+    const goTo = (id, m) => {
+      state.manualDraft = { account_id: id, month: m, as_of_date: asOf(m) };
       renderManual();
-      const amt = document.getElementById("man-amount");
-      amt.scrollIntoView({ behavior: "smooth", block: "center" });
-      amt.focus();
-    }));
+      document.getElementById("man-form").scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+    body.querySelectorAll("[data-pick]").forEach((b) => b.addEventListener("click", () => goTo(b.dataset.pick, b.dataset.month)));
+    const skipBtn = document.getElementById("man-skip");
+    if (skipBtn) skipBtn.addEventListener("click", () => {
+      skipped.add(key($acct.value, Calc.normMonth($month.value)));
+      state.manualDraft = null;
+      renderManual();
+    });
+    const unskip = document.getElementById("man-unskip");
+    if (unskip) unskip.addEventListener("click", () => { skipped.clear(); state.manualDraft = null; renderManual(); });
     const allBtn = document.getElementById("man-all");
     if (allBtn) allBtn.addEventListener("click", () => { state.manualShowAll = !showAll; state.manualDraft = draft(); renderManual(); });
 
@@ -2553,7 +2625,7 @@
       e.preventDefault();
       const $err = document.getElementById("man-err");
       const row = check();
-      if (!norm($amount.value)) { $err.textContent = "Enter the amount."; return; }
+      if (!norm($amount.value)) { $err.textContent = "Enter the balance."; focusAmount(); return; }
       if (row.problems.length) { $err.textContent = row.problems[0].msg; return; }
       if (row.resolved.large && !confirmedLarge) {
         confirmedLarge = true;
@@ -2567,10 +2639,13 @@
       try {
         const res = await guarded(() => saveSnapshots([row.resolved], "manual"));
         syncRatesInBackground();
-        toast(res.replaced ? "Balance replaced" : "Balance saved");
-        state.manualDraft = { month: $month.value, as_of_date: $date.value };
         if (!isFlow(row.resolved.account)) state.ovMonth = row.resolved.month;
+        // In the to-do flow, move on to the next balance; otherwise stay on the same month and date.
+        state.manualDraft = inQueue ? null : { month: $month.value, as_of_date: $date.value };
         renderManual();
+        const left = dueTotal(dueItems());
+        toast(`${res.replaced ? "Replaced" : "Saved"}${inQueue ? (left ? ` · ${left} left` : " · all done!") : ""}`);
+        if (inQueue) window.scrollTo({ top: 0, behavior: "smooth" });
       } catch (ex) {
         $err.textContent = friendlyError(ex);
         setBusy(btn, false);
@@ -2601,6 +2676,10 @@
           <div class="spread"><h3>${esc(state.me.name)}</h3><span class="chip accent">${state.me.key === "p1" ? "Person 1" : "Person 2"}</span></div>
           <p class="muted mono" style="font-size:13px; word-break:break-all">${esc(state.email)}</p>
         </div>
+        <a class="card stack link-card" href="#fixed">
+          <div class="spread"><div class="label">Fixed payments</div><span class="chev">›</span></div>
+          <p class="muted small">Rent, parking and other monthly payments or income outside the cards.</p>
+        </a>
         <a class="card stack link-card" href="#goals">
           <div class="spread"><div class="label">Goals</div><span class="chev">›</span></div>
           <p class="muted small">${(state.goals || []).filter(goalsActive).length} active goal${(state.goals || []).filter(goalsActive).length === 1 ? "" : "s"}. Add, edit or deactivate goals.</p>
@@ -2612,7 +2691,11 @@
           <p class="muted small">Replaces every amount with dots on this device, including charts. The eye button at the top of each screen does the same.</p>
         </div>
         <div id="lock-settings"></div>
-        ${peopleFormHtml()}
+        <details class="card fold">
+          <summary class="spread"><div><div class="label">People & sign-in</div>
+            <div class="muted small" style="margin-top:6px">${people().map((p) => esc(p.name)).filter(Boolean).join(" & ")} · names, Google emails, default currency</div></div><span class="chev">›</span></summary>
+          <div style="margin-top:16px">${peopleFormHtml(true)}</div>
+        </details>
         <div class="card stack">
           <div class="label">Sheet</div>
           <h3>${esc(state.sheetTitle || "Connected sheet")}</h3>
@@ -2636,7 +2719,7 @@
     });
   }
 
-  function peopleFormHtml() {
+  function peopleFormHtml(embedded) {
     const p = people();
     if (!p[0].email && !p[1].email) p[0].email = state.email;
     const cur = CURRENCIES.includes(norm(state.settings.default_currency).toUpperCase())
@@ -2650,7 +2733,7 @@
           <input id="pf-${x.key}-email" type="email" inputmode="email" autocapitalize="off" spellcheck="false" value="${esc(x.email)}" placeholder="name@example.com"></div>
       </div>`;
     return `
-      <form class="card stack-lg" id="people-form" novalidate>
+      <form class="${embedded ? "" : "card "}stack-lg" id="people-form" novalidate>
         ${p.map(person).join("")}
         <div class="stack">
           <div class="label">Default display currency</div>
@@ -3581,26 +3664,30 @@
       account_id: accountId, month,
       as_of_date: month === Calc.currentMonth() ? Calc.today() : Calc.lastDayOfMonth(month),
     };
+    state.manualPinned = true; // keep this account when the Update screen opens
     closeSheet();
     if (currentRoute() === "update") route(); else location.hash = "update";
   }
 
-  const DUE_SHOWN = 3;
+  // Overview's To do: how much is left, the next balance, one button to start, and the list on demand.
   function dueCardHtml(due) {
     if (!due.length) return "";
+    const total = dueTotal(due);
+    const next = due[0];
     const item = (d, i) => `
       <button class="due-item" data-due="${i}">
         <span><span class="due-name">${accountName(d.account)}</span>
-          <span class="muted small mono">${esc(dueWhen(d))} · ${esc(TYPE_LABEL[lower(d.account.type)] || d.account.type)}</span></span>
+          <span class="muted small mono">${esc(dueWhen(d))}</span></span>
         <span class="row">${d.overdue ? `<span class="chip neg">Overdue</span>` : `<span class="chip warn">Due</span>`}<span class="chev">›</span></span>
       </button>`;
-    const over = due.filter((d) => d.overdue).reduce((n, d) => n + d.months.length, 0);
     return `
       <div class="card notice stack">
-        <div class="spread"><div class="label">To do · ${dueTotal(due)}</div>${over ? `<span class="chip neg">${over} overdue</span>` : ""}</div>
-        <div class="stack" style="gap:8px">${due.slice(0, DUE_SHOWN).map(item).join("")}</div>
-        ${due.length > DUE_SHOWN ? `<details class="due-more"><summary class="link-btn">Show all ${due.length} accounts</summary>
-          <div class="stack" style="gap:8px; margin-top:8px">${due.slice(DUE_SHOWN).map((d, i) => item(d, i + DUE_SHOWN)).join("")}</div></details>` : ""}
+        <div class="spread"><div class="label">To do</div>${due.some((d) => d.overdue) ? `<span class="chip neg">Overdue</span>` : `<span class="chip warn">Due</span>`}</div>
+        <div><div class="due-name">${total === 1 ? "1 balance to enter" : `${total} balances to enter`}${due.length > 1 ? ` · ${due.length} accounts` : ""}</div>
+          <div class="muted small">Next: ${accountName(next.account)} · ${esc(Calc.monthLabel(next.month, true))}</div></div>
+        <button type="button" class="btn primary block" data-due="0">${total === 1 ? "Enter it now" : "Start updating"}</button>
+        ${due.length > 1 ? `<details class="due-more"><summary class="link-btn">See the list</summary>
+          <div class="stack" style="gap:8px; margin-top:8px">${due.map(item).join("")}</div></details>` : ""}
       </div>`;
   }
 
@@ -3646,10 +3733,7 @@
     const active = goals.filter(goalsActive);
     const inactive = goals.filter((g) => !goalsActive(g));
     $screen.innerHTML = `
-      <div class="page-head">
-        <div><div class="label">More</div><h1>Goals</h1></div>
-        <a class="btn small" href="#more">Back</a>
-      </div>
+      ${subHead("Goals", state.lastTab || "more")}
       <div class="stack-lg">
         <button class="btn primary block" id="goal-add">+ New goal</button>
         ${active.length ? `<div class="stack">${active.map((g) => goalCardHtml(g, false)).join("")}</div>`
