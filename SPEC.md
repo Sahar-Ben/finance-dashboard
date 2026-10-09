@@ -183,6 +183,8 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 
 26. **Clear what to update** (requested after change 25). On Banks, the status card lists each bank account that needs a balance this month (name, due since, who updates it) instead of a general "Update now" button; tapping one opens the One balance form with that account and month filled in. The Update screen shows One balance only, with the person's **To do** list above the form: tapping an item selects it (highlighted), fills in the account, month and as-of date, and puts the cursor in Amount. After saving, the list refreshes. When nothing is due it says "All up to date". Pasting many rows is still available behind a small link at the bottom.
 
+27. **Missing months of the whole year** (requested after change 26). To do now also lists every earlier month of the current year that has no balance, from January (or from the account's first balance if that is older; a loan only from its start month), not only months after the first balance entered. To do shows one row per account: one month ("Oct 2026"), or "9 months missing · from Jan 2026". The count is the number of balances missing. Tapping a row opens the oldest missing month; after saving, the row moves on to the next missing month ("Feb 2026 · 7 more after this").
+
 ## How to work
 
 Build one stage at a time. After each stage: update SPEC.md, commit, merge to main, and give a plain-language test checklist. Wait for the go-ahead before the next stage.

@@ -275,8 +275,8 @@
   // ---------- due list ----------
 
   // Accounts the person updates whose due date has passed with no snapshot yet.
-  // Monthly accounts: due this month once update_day has passed; earlier months since the account's
-  // first snapshot that are still empty are overdue. Home: due once a year from update_month/update_day.
+  // Monthly accounts: due this month once update_day has passed; earlier months of this year (or since
+  // the first snapshot, if older) that are still empty are overdue. Home: due once a year from update_month/update_day.
   // No update day means due from the 1st; a home with no update month is due when this year has no value.
   // Accounts with no updater go to whoever `noUpdater(account)` accepts (optional).
   function dueList(accounts, idx, personName, now, noUpdater) {
@@ -299,9 +299,15 @@
         if (!done) out.push({ account: a, month: dueMonth, overdue: nowM > dueMonth });
         return;
       }
+      // Earlier months are checked from January of this year (or the first snapshot, if older);
+      // a loan only from its start month.
       const first = idx.firstMonth.get(id);
-      if (first) {
-        for (let m = first; m < nowM; m = shiftMonth(m, 1)) {
+      let from = `${nowM.slice(0, 4)}-01`;
+      if (first && first < from) from = first;
+      const loanStart = type === "loan" ? normMonth(a.loan_start) : null;
+      if (loanStart && loanStart > from) from = loanStart;
+      {
+        for (let m = from; m < nowM; m = shiftMonth(m, 1)) {
           if (!idx.get(id, m)) out.push({ account: a, month: m, overdue: true });
         }
       }

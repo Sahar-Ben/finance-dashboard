@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.09-4";
+  const APP_VERSION = "2026.10.09-5";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
@@ -2414,14 +2414,14 @@
     }
     // What still needs a balance: tapping one fills the form below with that account and month.
     const due = dueItems();
-    const isPicked = (d) => keep.account_id === d.account.id && (keep.month || Calc.currentMonth()) === d.month;
+    const isPicked = (d) => keep.account_id === d.account.id && d.months.includes(keep.month || Calc.currentMonth());
     const todo = due.length ? `
       <div class="card notice stack">
-        <div class="spread"><div class="label">To do · ${due.length}</div><span class="muted small">Tap one to fill it in</span></div>
+        <div class="spread"><div class="label">To do · ${dueTotal(due)}</div><span class="muted small">Tap one to fill it in</span></div>
         <div class="stack" style="gap:8px">${due.map((d, i) => `
           <button type="button" class="due-item${isPicked(d) ? " picked" : ""}" data-pick="${i}">
             <span><span class="due-name">${accountName(d.account)}</span>
-              <span class="muted small mono">${Calc.monthLabel(d.month, true)} · ${esc(TYPE_LABEL[lower(d.account.type)] || d.account.type)}</span></span>
+              <span class="muted small mono">${esc(isPicked(d) && d.months.length > 1 ? `${Calc.monthLabel(keep.month, true)} · ${d.months.length - 1} more after this` : dueWhen(d))}</span></span>
             <span class="row">${isPicked(d) ? `<span class="chip accent">Selected</span>` : d.overdue ? `<span class="chip neg">Overdue</span>` : `<span class="chip warn">Due</span>`}</span>
           </button>`).join("")}</div>
       </div>` : `
@@ -3505,10 +3505,26 @@
 
   // ---------- Due now ----------
 
+  // One item per account: { account, month (the oldest missing), months (all missing), overdue }.
   function dueItems() {
     if (!state.me) return [];
-    return Calc.dueList(state.accounts, Calc.indexSnapshots(state.snapshots), state.me.name, new Date(), (a) => myShare(a) > 0);
+    const list = Calc.dueList(state.accounts, Calc.indexSnapshots(state.snapshots), state.me.name, new Date(), (a) => myShare(a) > 0);
+    const byId = new Map();
+    list.forEach((d) => {
+      const g = byId.get(d.account.id);
+      if (g) { g.months.push(d.month); g.overdue = g.overdue || d.overdue; }
+      else byId.set(d.account.id, { account: d.account, months: [d.month], overdue: d.overdue });
+    });
+    return [...byId.values()].map((g) => {
+      g.months.sort();
+      g.month = g.months[0];
+      return g;
+    });
   }
+  const dueTotal = (due) => due.reduce((n, d) => n + d.months.length, 0);
+  // "Oct 2026", or "9 months missing · from Jan 2026".
+  const dueWhen = (d) => (d.months.length === 1 ? Calc.monthLabel(d.month, true)
+    : `${d.months.length} months missing · from ${Calc.monthLabel(d.month, true)}`);
 
   function openManualFor(accountId, month) {
     state.updateMode = "manual";
@@ -3527,15 +3543,15 @@
     const item = (d, i) => `
       <button class="due-item" data-due="${i}">
         <span><span class="due-name">${accountName(d.account)}</span>
-          <span class="muted small mono">${Calc.monthLabel(d.month, true)} · ${esc(TYPE_LABEL[lower(d.account.type)] || d.account.type)}</span></span>
+          <span class="muted small mono">${esc(dueWhen(d))} · ${esc(TYPE_LABEL[lower(d.account.type)] || d.account.type)}</span></span>
         <span class="row">${d.overdue ? `<span class="chip neg">Overdue</span>` : `<span class="chip warn">Due</span>`}<span class="chev">›</span></span>
       </button>`;
-    const over = due.filter((d) => d.overdue).length;
+    const over = due.filter((d) => d.overdue).reduce((n, d) => n + d.months.length, 0);
     return `
       <div class="card notice stack">
-        <div class="spread"><div class="label">To do · ${due.length}</div>${over ? `<span class="chip neg">${over} overdue</span>` : ""}</div>
+        <div class="spread"><div class="label">To do · ${dueTotal(due)}</div>${over ? `<span class="chip neg">${over} overdue</span>` : ""}</div>
         <div class="stack" style="gap:8px">${due.slice(0, DUE_SHOWN).map(item).join("")}</div>
-        ${due.length > DUE_SHOWN ? `<details class="due-more"><summary class="link-btn">Show all ${due.length}</summary>
+        ${due.length > DUE_SHOWN ? `<details class="due-more"><summary class="link-btn">Show all ${due.length} accounts</summary>
           <div class="stack" style="gap:8px; margin-top:8px">${due.slice(DUE_SHOWN).map((d, i) => item(d, i + DUE_SHOWN)).join("")}</div></details>` : ""}
       </div>`;
   }
