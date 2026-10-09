@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.10-1";
+  const APP_VERSION = "2026.10.10-2";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
@@ -17,6 +17,19 @@
   const TYPE_LABEL = {
     current: "Bank", savings: "Savings", investment: "Investment", crypto: "Crypto",
     long_term: "Pension", study_fund: "Keren Hishtalmut", loan: "Loan", home: "Home", card: "Card", salary: "Salary",
+  };
+  // One line per account type, shown under the type in the account form.
+  const TYPE_HINT = {
+    current: "A bank account you pay from. Counts as reachable money.",
+    savings: "A savings account or deposit.",
+    investment: "A brokerage or investment account.",
+    crypto: "A crypto wallet or exchange.",
+    long_term: "A pension fund.",
+    study_fund: "A study fund (Keren Hishtalmut).",
+    loan: "Money you owe, such as a mortgage. Enter what is still owed.",
+    home: "A property. Its value is updated once a year.",
+    card: "A credit card. Enter each month's total spending; it is not a balance.",
+    salary: "A salary. Enter each month's net pay; it is not a balance.",
   };
   const CURRENCIES = ["ILS", "USD", "EUR"];
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -547,7 +560,8 @@
     if (SUBSCREENS[h]) return h;
     return TABS.some((t) => t.id === h) ? h : "overview";
   }
-  const currentTab = () => { const r = currentRoute(); return SUBSCREENS[r] ? SUBSCREENS[r].tab : r; };
+  // A sub-screen highlights the tab it was opened from (Update from Banks keeps Banks lit).
+  const currentTab = () => { const r = currentRoute(); return SUBSCREENS[r] ? (state.lastTab || SUBSCREENS[r].tab) : r; };
 
   function route() {
     if (!state.token) return renderSignIn();
@@ -564,8 +578,8 @@
       <button data-tab="${t.id}" ${t.id === tab ? 'aria-current="page"' : ""}>${ICONS[t.id]}<span>${t.label}</span></button>`).join("")}</div>`;
     if (!SUBSCREENS[r]) state.lastTab = r; // where a sub-screen's "Back" returns to
     // Opening Update afresh starts on the next balance to do, unless a button chose an account.
-    if (r === "update" && state.prevRoute !== "update") {
-      if (!state.manualPinned) { state.manualDraft = null; state.updateMode = "manual"; }
+    if (r === "update") {
+      if (state.prevRoute !== "update" && !state.manualPinned) { state.manualDraft = null; state.updateMode = "manual"; }
       state.manualPinned = false;
     }
     state.prevRoute = r;
@@ -834,12 +848,17 @@
   // affects: true = changes "saved from income"; false = neutral, only explains the gap.
   // dir: "in" / "out" fixed sign, "both" = choose, "calc" = worked out (own transfers).
   const EXPL_CATS = {
-    income: { label: "Extra income", dir: "in", affects: true },
-    own_transfer: { label: "Transfer between my accounts", dir: "calc", affects: false },
-    refund: { label: "Money from a friend for something on my card", short: "Paid back by a friend", dir: "in", affects: true },
-    spending: { label: "Spending: cash / Bit / transfer", dir: "out", affects: true },
-    transfer: { label: "Transfer to/from someone else", dir: "both", affects: false },
-    investment: { label: "Investment gain or loss", dir: "both", affects: false },
+    income: { label: "Extra income", dir: "in", affects: true, hint: "Bonus, gift, something you sold" },
+    own_transfer: { label: "Transfer between my accounts", dir: "calc", affects: false, hint: "Money moved from one of your accounts to another" },
+    refund: { label: "Money from a friend for something on my card", short: "Paid back by a friend", dir: "in", affects: true, hint: "A friend paid you back for something on your card" },
+    spending: { label: "Spending: cash / Bit / transfer", dir: "out", affects: true, hint: "Paid in cash, Bit or bank transfer, not on a card" },
+    transfer: { label: "Transfer to/from someone else", dir: "both", affects: false, hint: "Sent to or received from family or others" },
+    investment: { label: "Investment gain or loss", dir: "both", affects: false, hint: "Value went up or down; no money was moved" },
+  };
+  // Choices in the order that fits the gap: money in, or money out.
+  const EXPL_ORDER = {
+    in: ["income", "refund", "own_transfer", "transfer", "investment", "spending"],
+    out: ["spending", "own_transfer", "transfer", "investment", "income", "refund"],
   };
   const explLabel = (cat) => EXPL_CATS[cat].short || EXPL_CATS[cat].label;
   const acctById = (id) => state.accounts.find((a) => norm(a.id) === norm(id));
@@ -903,8 +922,11 @@
             <span class="row"><span class="mono ${x.amount > 0 ? "pos" : x.amount < 0 ? "neg" : "muted"}">${esc(fmtSigned(x.amount, cur))}</span>
             <button type="button" class="btn small danger" data-ex-del="${esc(x.row.id)}">Delete</button></span></li>`).join("")}</ul>` : ""}
         ${!list.length && prevList.length ? `<button type="button" class="btn block" id="ex-copy">Copy ${Calc.monthLabel(prevM)}'s ${prevList.length} explanation${prevList.length > 1 ? "s" : ""}</button>` : ""}
-        <div class="field"><label class="label" for="ex-cat">What was it?</label>
-          <select id="ex-cat">${Object.entries(EXPL_CATS).map(([k, c]) => `<option value="${k}">${esc(c.label)}</option>`).join("")}</select></div>
+        <div class="field"><span class="label">What was it?</span>
+          <div class="choice-list" id="ex-cat" role="radiogroup">${EXPL_ORDER[dirDefault].map((k) => `
+            <button type="button" class="choice" role="radio" data-cat="${k}" aria-checked="false">
+              <span class="choice-title">${esc(EXPL_CATS[k].label)}</span><span class="muted small">${esc(EXPL_CATS[k].hint)}</span>
+            </button>`).join("")}</div></div>
         <div class="field-row" id="ex-route">
           <div class="field"><label class="label" for="ex-from">From</label><select id="ex-from">${acctOpts(moneyAccts[0] && moneyAccts[0].id)}</select></div>
           <div class="field"><label class="label" for="ex-to">To</label><select id="ex-to">${acctOpts(moneyAccts[1] && moneyAccts[1].id)}</select></div>
@@ -925,7 +947,7 @@
         <p class="err-text" id="ex-err"></p>
         <button class="btn primary block" type="submit">Save</button>
       </form>`);
-    const $cat = document.getElementById("ex-cat");
+    const $cat = { value: EXPL_ORDER[dirDefault][0] }; // the chosen category
     const $amt = document.getElementById("ex-amount");
     const $from = document.getElementById("ex-from");
     const $to = document.getElementById("ex-to");
@@ -943,16 +965,36 @@
         ? (Math.abs(transferEffect(x)) < 0.5 ? "Both accounts count fully for you, so this changes nothing in your totals; it just explains the move."
           : `Your share changes by ${fmtSigned(transferEffect(x), cur)} (a joint account counts 50% for you).`) : "";
     };
-    [$cat, $from, $to].forEach((el) => el.addEventListener("change", sync));
+    const markCat = () => document.querySelectorAll("#ex-cat .choice").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.cat === $cat.value)));
+    document.getElementById("ex-cat").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-cat]");
+      if (!b) return;
+      $cat.value = b.dataset.cat;
+      markCat();
+      sync();
+      // Bring the fields for this choice into view.
+      document.getElementById($cat.value === "own_transfer" ? "ex-route" : "ex-amount").scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    [$from, $to].forEach((el) => el.addEventListener("change", sync));
     $amt.addEventListener("input", sync);
-    // Pick the most likely category for the gap.
-    $cat.value = dirDefault === "in" ? "income" : "spending";
+    // The most likely category for the gap is chosen first.
+    markCat();
     sync();
     document.getElementById("ex-dir").addEventListener("click", (e) => {
       const b = e.target.closest("[data-dir]");
       if (b) document.querySelectorAll("#ex-dir button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
     });
-    const done = (msg) => { closeSheet(); toast(msg); route(); };
+    // Redraw Savings, then reopen this panel with the new remaining amount until it is all explained.
+    const done = (msg) => {
+      closeSheet();
+      route();
+      const left = state.lastUnexplained;
+      const again = document.getElementById("sv-explain");
+      if (again && left != null && Math.abs(left) >= 1) {
+        toast(`${msg} · ${fmtMoney(Math.abs(left), cur)} still to explain`);
+        again.click();
+      } else toast(left != null && Math.abs(left) < 1 ? `${msg} · everything explained ✓` : msg);
+    };
     const err = (e) => { document.getElementById("ex-err").textContent = friendlyError(e); };
     const base = () => ({ month, owner: state.me.name, currency: cur, entered_by: state.me.name, entered_at: new Date().toISOString() });
     $sheetBody.querySelectorAll("[data-ex-del]").forEach((b) => b.addEventListener("click", async () => {
@@ -1257,6 +1299,7 @@
     const loanM = newLoanMoney(month);
     // Unexplained = total saved − saved from income (already including explained income/refunds/spending) − neutral explanations.
     const otherM = cashM != null && savedM != null ? cashM - loanM.sum - savedM - explNeutralM : null;
+    state.lastUnexplained = otherM; // read by the Explain panel after a save
     // Total saved from all sources, worked out from balances alone (extra income, friends paying back included).
     const totalSavedM = cashM != null ? cashM - loanM.sum : null;
     const totalSeries = yearMonths.map((m) => { const c = cashChange(m); return c == null ? null : c - newLoanMoney(m).sum; });
@@ -2496,12 +2539,11 @@
     const keepMonth = keep.month || Calc.currentMonth();
     const inQueue = queue.some((q) => q.account.id === keep.account_id && q.month === keepMonth);
     const showAll = state.manualShowAll || !mine.length || (keep.account_id && !mine.some((a) => a.id === keep.account_id));
-    const pos = inQueue ? queue.findIndex((q) => q.account.id === keep.account_id && q.month === keepMonth) : -1;
 
     const progress = total ? `
       <div class="card notice stack">
         <div class="spread"><div class="label">To do</div><span class="mono small">${queue.length} left${skipped.size ? ` · ${skipped.size} skipped` : ""}</span></div>
-        <p class="muted small">${inQueue ? "Enter each balance and tap Save & next. The app moves to the next one for you." : "Pick any balance below, or tap Back to the list."}</p>
+        <p class="muted small">${inQueue ? "Enter each balance and tap Save & next. The app moves to the next one for you." : "You chose a balance outside the list. Tap an account under Still to do to continue the list."}</p>
         ${skipped.size ? `<button type="button" class="link-btn" id="man-unskip" style="align-self:flex-start">Show skipped again</button>` : ""}
       </div>` : `
       <div class="card stack"><div class="spread"><div class="label">To do</div><span class="chip pos">All up to date</span></div>
@@ -2526,7 +2568,7 @@
     body.innerHTML = `${progress}
       <form id="man-form" class="card stack-lg" novalidate style="margin-top:16px">
         <div class="stack" style="gap:4px">
-          <div class="label">${inQueue ? `Next up${queue.length > 1 ? ` · ${pos + 1} of ${queue.length}` : ""}` : "Balance"}</div>
+          <div class="label" id="man-step"></div>
           <h2 id="man-title"></h2>
           <div class="muted small mono" id="man-sub"></div>
         </div>
@@ -2534,8 +2576,8 @@
           <input id="man-amount" class="amount-input" type="text" inputmode="decimal" autocomplete="off" placeholder="0" value="${esc(keep.amount || "")}"></div>
         <div id="man-context" class="stack"></div>
         <p class="err-text" id="man-err"></p>
-        <button class="btn primary block" type="submit" id="man-save">${inQueue && queue.length > 1 ? "Save & next" : "Save balance"}</button>
-        ${inQueue ? `<button type="button" class="btn ghost block" id="man-skip">Skip for now</button>` : ""}
+        <button class="btn primary block" type="submit" id="man-save">Save balance</button>
+        <button type="button" class="btn ghost block" id="man-skip" hidden>Skip for now</button>
         <details class="calc" ${inQueue ? "" : "open"}>
           <summary class="link-btn">Change account, month or date</summary>
           <div class="stack" style="margin-top:12px">
@@ -2568,10 +2610,16 @@
       Calc.checkImport([row], { accounts: state.accounts, idx: Calc.indexSnapshots(state.snapshots), rates: state.rates, now: new Date() });
       return row;
     };
+    // Whether the chosen account and month is one of the balances to do (then Save moves on to the next).
+    let queued = false;
     const updateContext = () => {
       state.manualDraft = draft();
       confirmedLarge = false;
-      document.getElementById("man-save").textContent = inQueue && queue.length > 1 ? "Save & next" : "Save balance";
+      const pos = queue.findIndex((q) => q.account.id === $acct.value && q.month === Calc.normMonth($month.value));
+      queued = pos >= 0;
+      document.getElementById("man-step").textContent = queued ? `Next up${queue.length > 1 ? ` · ${pos + 1} of ${queue.length}` : ""}` : "Balance";
+      document.getElementById("man-save").textContent = queued && queue.length > 1 ? "Save & next" : "Save balance";
+      document.getElementById("man-skip").hidden = !queued;
       const a = state.accounts.find((x) => x.id === $acct.value);
       const cur = a ? norm(a.currency).toUpperCase() : "";
       document.getElementById("man-cur").textContent = cur;
@@ -2641,11 +2689,12 @@
         syncRatesInBackground();
         if (!isFlow(row.resolved.account)) state.ovMonth = row.resolved.month;
         // In the to-do flow, move on to the next balance; otherwise stay on the same month and date.
-        state.manualDraft = inQueue ? null : { month: $month.value, as_of_date: $date.value };
+        const wasQueued = queued;
+        state.manualDraft = wasQueued ? null : { month: $month.value, as_of_date: $date.value };
         renderManual();
         const left = dueTotal(dueItems());
-        toast(`${res.replaced ? "Replaced" : "Saved"}${inQueue ? (left ? ` · ${left} left` : " · all done!") : ""}`);
-        if (inQueue) window.scrollTo({ top: 0, behavior: "smooth" });
+        toast(`${res.replaced ? "Replaced" : "Saved"}${wasQueued ? (left ? ` · ${left} left` : " · all done!") : ""}`);
+        if (wasQueued) window.scrollTo({ top: 0, behavior: "smooth" });
       } catch (ex) {
         $err.textContent = friendlyError(ex);
         setBusy(btn, false);
@@ -2925,7 +2974,7 @@
     } else {
       const map = {};
       active.forEach((a) => {
-        const k = norm(a[grouping]) || (grouping === "country" ? "No country" : "No institution");
+        const k = norm(a[grouping]) || (grouping === "country" ? "No country" : "Other");
         (map[k] = map[k] || []).push(a);
       });
       groups = Object.keys(map).sort((x, y) => x.localeCompare(y)).map((n) => ({ name: n, list: map[n] }));
@@ -3002,6 +3051,9 @@
         : Charts.line({ labels, values, tips, fmtTick: fmtTickFor(own), ariaLabel: "Balance history" });
     }
     const linked = type === "card" && norm(a.linked_account) ? state.accounts.find((x) => x.id === norm(a.linked_account)) : null;
+    // This account's missing months from the To do (only when the signed-in person updates it).
+    const dueHere = dueItems().find((d) => d.account.id === a.id);
+    const missingHere = dueHere ? dueHere.months : [];
     openSheet(`
       <div class="stack-lg">
         <div class="spread">
@@ -3019,55 +3071,31 @@
         </div>
         ${chart ? `<div class="card tight">${chart}</div>` : ""}
         ${type === "loan" ? loanHistoryHtml(a, idx, own) : ""}
+        ${missingHere.length ? `<div class="muted small warn-text">${missingHere.length === 1 ? `${Calc.monthLabel(missingHere[0], true)} is missing` : `${missingHere.length} months missing · from ${Calc.monthLabel(missingHere[0], true)}`}</div>` : ""}
         <div class="row">
-          <button class="btn primary" id="ad-add" style="flex:1">Add balance</button>
+          <button class="btn primary" id="ad-add" style="flex:1">${missingHere.length ? `Add ${Calc.monthLabel(missingHere[0])}` : isFlow(a) ? "Add a month" : "Add balance"}</button>
           <button class="btn" id="ad-edit" style="flex:1">Edit account</button>
         </div>
         <div>
           <div class="group-title"><span class="label">History</span><span class="label">${list.length}</span></div>
-          ${list.length ? `<div class="stack">${list.slice().reverse().map(({ month, snap }) => `
-            <div class="hist-row">
-              <div class="spread">
+          ${list.length ? `<p class="muted small" style="margin:-4px 4px 10px">Tap a month to correct or delete it.</p>
+          <div class="stack" style="gap:8px">${list.slice().reverse().map(({ month, snap }) => `
+            <button type="button" class="hist-row tap" data-snap-edit="${esc(month)}">
+              <span class="spread">
                 <span class="mono">${Calc.monthLabel(month, true)}</span>
-                <span class="mono hist-amount">${esc(fmtMoney(Calc.parseAmount(snap.amount), norm(snap.currency).toUpperCase() || own, true))}</span>
-              </div>
-              <div class="spread">
-                <span class="muted small">${esc(snap.as_of_date ? `as of ${Calc.normDate(snap.as_of_date) || snap.as_of_date}` : "")}${snap.source ? ` · ${esc(snap.source)}` : ""}${snap.entered_by ? ` · ${esc(snap.entered_by)}` : ""}</span>
-                <span class="row">
-                  <button class="btn small" data-snap-edit="${esc(month)}">Edit</button>
-                  <button class="btn small danger" data-snap-del="${esc(month)}">Delete</button>
-                </span>
-              </div>
-            </div>`).join("")}</div>` : `<p class="muted">No balances yet.</p>`}
+                <span class="row"><span class="mono hist-amount">${esc(fmtMoney(Calc.parseAmount(snap.amount), norm(snap.currency).toUpperCase() || own, true))}</span><span class="chev">›</span></span>
+              </span>
+              <span class="muted small">${esc(snap.as_of_date ? `as of ${shortDate(Calc.normDate(snap.as_of_date)) || snap.as_of_date}` : "")}${snap.entered_by ? ` · by ${esc(snap.entered_by)}` : ""}</span>
+            </button>`).join("")}</div>` : `<p class="muted">No balances yet.</p>`}
         </div>
-        <p class="err-text" id="ad-err"></p>
       </div>`);
     Charts.bind($sheetBody);
     if (type === "loan") bindLoanHistory(a, idx);
     document.getElementById("ad-edit").addEventListener("click", () => openAccountForm(a));
-    document.getElementById("ad-add").addEventListener("click", () => {
-      state.updateMode = "manual";
-      state.manualDraft = { account_id: a.id, month: Calc.currentMonth(), as_of_date: Calc.today() };
-      state.manualShowAll = true;
-      closeSheet();
-      if (currentRoute() === "update") route(); else location.hash = "update";
-    });
+    // Opens the Update form on this account: its oldest missing month, else this month.
+    document.getElementById("ad-add").addEventListener("click", () => openManualFor(a.id, missingHere[0] || Calc.currentMonth()));
     $sheetBody.querySelectorAll("[data-snap-edit]").forEach((b) => b.addEventListener("click", () => {
       openSnapshotEditor(a, idx.get(norm(a.id), b.dataset.snapEdit));
-    }));
-    $sheetBody.querySelectorAll("[data-snap-del]").forEach((b) => b.addEventListener("click", async () => {
-      const month = b.dataset.snapDel;
-      if (!confirm(`Delete the ${Calc.monthLabel(month, true)} balance of "${norm(a.nickname) || a.id}"? This removes the row from the sheet.`)) return;
-      setBusy(b, true, "…");
-      try {
-        await guarded(() => deleteSnapshot(a, month, idx.get(norm(a.id), month)));
-        toast("Balance deleted");
-        openAccountDetail(a);
-        refreshBehindSheet();
-      } catch (e) {
-        document.getElementById("ad-err").textContent = friendlyError(e);
-        setBusy(b, false);
-      }
     }));
   }
 
@@ -3216,9 +3244,24 @@
           <input id="se-date" type="date" value="${esc(Calc.normDate(snap.as_of_date) || "")}"></div>
         <p class="err-text" id="se-err"></p>
         <button class="btn primary block" type="submit">Save</button>
-        <button class="btn ghost block" type="button" id="se-back">Back</button>
+        <button class="btn ghost block" type="button" id="se-back">Cancel</button>
+        <button class="btn danger block" type="button" id="se-del">Delete this balance</button>
       </form>`);
     document.getElementById("se-back").addEventListener("click", () => openAccountDetail(a));
+    document.getElementById("se-del").addEventListener("click", async (e) => {
+      if (!confirm(`Delete the ${Calc.monthLabel(month, true)} balance of "${norm(a.nickname) || a.id}"? This removes the row from the sheet.`)) return;
+      const b = e.currentTarget;
+      setBusy(b, true, "Deleting…");
+      try {
+        await guarded(() => deleteSnapshot(a, month, snap));
+        toast("Balance deleted");
+        openAccountDetail(a);
+        refreshBehindSheet();
+      } catch (ex) {
+        document.getElementById("se-err").textContent = friendlyError(ex);
+        setBusy(b, false);
+      }
+    });
     document.getElementById("se-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const $err = document.getElementById("se-err");
@@ -3263,6 +3306,22 @@
       }).join("");
   }
 
+  // After adding an account: offer to enter its first balance straight away.
+  function openAddedNext(acct) {
+    route();
+    const m = Calc.currentMonth();
+    const flow = isFlow(acct);
+    openSheet(`
+      <div class="stack-lg">
+        <div class="spread"><div><div class="label">Account added</div><h2>${esc(acct.nickname)}</h2></div>
+          <button type="button" class="icon-btn" data-close aria-label="Close">✕</button></div>
+        <p class="muted">${flow ? `Enter its total for ${esc(Calc.monthLabel(m, true))} now?` : `Enter its balance for ${esc(Calc.monthLabel(m, true))} now? Earlier months of this year will appear in To do.`}</p>
+        <button type="button" class="btn primary block" id="an-now">${flow ? "Enter this month's total" : "Enter the balance"}</button>
+        <button type="button" class="btn ghost block" data-close>Later</button>
+      </div>`);
+    document.getElementById("an-now").addEventListener("click", () => openManualFor(acct.id, m));
+  }
+
   function uniqueValues(field) {
     return [...new Set(state.accounts.map((a) => norm(a[field])).filter(Boolean))].sort();
   }
@@ -3283,13 +3342,11 @@
           <button type="button" class="icon-btn" data-close aria-label="Close">✕</button>
         </div>
         <div class="field"><label class="label" for="af-type">Type</label>
-          <select id="af-type">${options(TYPES.map((t) => [t, TYPE_LABEL[t]]), type)}</select></div>
-        <div class="field"><label class="label" for="af-nickname">Nickname</label>
+          <select id="af-type">${options(TYPES.map((t) => [t, TYPE_LABEL[t]]), type)}</select>
+          <span class="hint" id="af-type-hint">${esc(TYPE_HINT[type] || "")}</span></div>
+        <div class="field"><label class="label" for="af-nickname">Name</label>
           <input id="af-nickname" value="${esc(a.nickname)}" autocomplete="off" placeholder="Bank A Current"></div>
-        <div class="field"><label class="label" for="af-id">ID</label>
-          <input id="af-id" value="${esc(a.id)}" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="bank-a-current" ${isNew ? "" : "readonly"}>
-          <span class="hint">${isNew ? "Short unique code: lowercase letters, numbers and dashes. Cannot be changed later." : "IDs cannot be changed."}</span></div>
-        <div class="field"><label class="label" for="af-institution">Institution</label>
+        <div class="field"><label class="label" for="af-institution" id="af-inst-label">Bank or company${type === "home" ? " (optional)" : ""}</label>
           <input id="af-institution" list="dl-inst" value="${esc(a.institution)}" autocomplete="off" placeholder="Bank A">
           <datalist id="dl-inst">${uniqueValues("institution").map((v) => `<option value="${esc(v)}">`).join("")}</datalist></div>
         <div class="field"><label class="label" for="af-country">Country</label>
@@ -3305,9 +3362,10 @@
             <select id="af-updater">${options(names, matchName(a.updater, names) || "", "Choose…")}</select></div>
         </div>
         <div class="field-row">
-          <div class="field"><label class="label" for="af-day">Due day</label>
-            <input id="af-day" type="number" inputmode="numeric" min="1" max="31" value="${esc(a.update_day)}" placeholder="1–31"></div>
-          <div class="field" ${showIf("update_month")}><label class="label" for="af-month">Due month</label>
+          <div class="field"><label class="label" for="af-day">Update on day</label>
+            <input id="af-day" type="number" inputmode="numeric" min="1" max="31" value="${esc(a.update_day)}" placeholder="1–31">
+            <span class="hint">Empty = from the 1st</span></div>
+          <div class="field" ${showIf("update_month")}><label class="label" for="af-month">Update in month</label>
             <select id="af-month">${options(MONTHS.map((m, i) => [i + 1, m]), a.update_month, "Choose…")}</select></div>
         </div>
         <div class="field" ${showIf("linked_account")}><label class="label" for="af-linked" id="af-linked-label">${type === "salary" ? "Paid into" : "Paid from"}</label>
@@ -3324,6 +3382,12 @@
         </div>
         <div class="field"><label class="label" for="af-notes">Notes</label>
           <input id="af-notes" value="${esc(a.notes)}" autocomplete="off" placeholder="Optional"></div>
+        <details class="calc">
+          <summary class="link-btn">Account ID${isNew ? " (set automatically)" : ""}</summary>
+          <div class="field" style="margin-top:10px">
+            <input id="af-id" value="${esc(a.id)}" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="bank-a-current" ${isNew ? "" : "readonly"} aria-label="Account ID">
+            <span class="hint">${isNew ? "A short code the sheet uses for this account, made from the name. Lowercase letters, numbers and dashes; it cannot be changed later." : "The code the sheet uses for this account. It cannot be changed."}</span></div>
+        </details>
         <p class="err-text" id="af-err"></p>
         <button class="btn primary block" type="submit">${isNew ? "Add account" : "Save changes"}</button>
         ${isNew ? "" : `<button class="btn ${isActive(a) ? "danger" : ""} block" type="button" id="af-toggle">${isActive(a) ? "Deactivate account" : "Reactivate account"}</button>
@@ -3343,6 +3407,8 @@
       });
       document.getElementById("af-linked-label").textContent = $type.value === "salary" ? "Paid into" : "Paid from";
       document.getElementById("af-linked-hint").textContent = LINK_HINT[$type.value] || "";
+      document.getElementById("af-type-hint").textContent = TYPE_HINT[$type.value] || "";
+      document.getElementById("af-inst-label").textContent = `Bank or company${$type.value === "home" ? " (optional)" : ""}`;
     });
     seg.addEventListener("click", (e) => {
       const b = e.target.closest("[data-cur]");
@@ -3379,13 +3445,14 @@
       if (isNew) obj.active = true;
 
       let err = "";
-      if (!obj.nickname) err = "Give the account a nickname.";
-      else if (!ID_RE.test(obj.id)) err = "ID must be lowercase letters, numbers, dashes or underscores (max 32).";
-      else if (isNew && state.accounts.some((x) => lower(x.id) === obj.id)) err = `The ID "${obj.id}" is already used.`;
-      else if (!obj.institution) err = "Enter the institution.";
+      if (isNew && !obj.id) obj.id = suggestId(obj.nickname);
+      if (!obj.nickname) err = "Give the account a name.";
+      else if (!ID_RE.test(obj.id)) err = "The account ID must be lowercase letters, numbers, dashes or underscores (max 32). Open \"Account ID\" to fix it.";
+      else if (isNew && state.accounts.some((x) => lower(x.id) === obj.id)) err = `The account ID "${obj.id}" is already used. Open "Account ID" to change it.`;
+      else if (!obj.institution && t !== "home") err = "Enter the bank or company.";
       else if (!obj.owner) err = "Choose the owner.";
       else if (!obj.updater) err = "Choose who updates this account.";
-      else if (!Number.isInteger(obj.update_day) || obj.update_day < 1 || obj.update_day > 31) err = "Due day must be a whole number from 1 to 31.";
+      else if (obj.update_day !== "" && (!Number.isInteger(obj.update_day) || obj.update_day < 1 || obj.update_day > 31)) err = "The update day must be a whole number from 1 to 31, or empty.";
       else if (t === "home" && !obj.update_month) err = "Choose the month a home value is due.";
       else if (t === "loan" && obj.monthly_payment !== "" && !(obj.monthly_payment >= 0)) err = "Monthly payment must be a positive number.";
       else if (t === "loan" && obj.original_amount !== "" && !(obj.original_amount > 0)) err = "Original loan amount must be a positive number.";
@@ -3410,8 +3477,9 @@
           return true;
         });
         if (!ok) return;
+        if (isNew) return openAddedNext(obj);
         closeSheet();
-        toast(isNew ? "Account added" : "Changes saved");
+        toast("Changes saved");
         route();
       } catch (ex) {
         $err.textContent = friendlyError(ex);
@@ -3685,7 +3753,7 @@
         <div class="spread"><div class="label">To do</div>${due.some((d) => d.overdue) ? `<span class="chip neg">Overdue</span>` : `<span class="chip warn">Due</span>`}</div>
         <div><div class="due-name">${total === 1 ? "1 balance to enter" : `${total} balances to enter`}${due.length > 1 ? ` · ${due.length} accounts` : ""}</div>
           <div class="muted small">Next: ${accountName(next.account)} · ${esc(Calc.monthLabel(next.month, true))}</div></div>
-        <button type="button" class="btn primary block" data-due="0">${total === 1 ? "Enter it now" : "Start updating"}</button>
+        <a class="btn primary block" href="#update">${total === 1 ? "Enter it now" : "Start updating"}</a>
         ${due.length > 1 ? `<details class="due-more"><summary class="link-btn">See the list</summary>
           <div class="stack" style="gap:8px; margin-top:8px">${due.map(item).join("")}</div></details>` : ""}
       </div>`;

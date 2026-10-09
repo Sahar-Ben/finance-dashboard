@@ -435,3 +435,12 @@ details.fold > summary { cursor: pointer; }
 details.fold[open] > summary .chev { transform: rotate(90deg); }
 details.fold > summary .chev { transition: transform .15s ease; }
 #lock-settings:empty { display: none; }
+button.hist-row { width: 100%; text-align: left; color: inherit; font: inherit; cursor: pointer; }
+button.hist-row:active, button.due-item:active { border-color: var(--accent); }
+
+/* Tappable single-choice list (Explain: what was it?) */
+.choice-list { display: flex; flex-direction: column; gap: 8px; }
+.choice { display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left; color: inherit; font: inherit; cursor: pointer;
+  background: #0D0B16; border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; min-height: 44px; }
+.choice-title { font-weight: 600; }
+.choice[aria-checked="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; background: rgba(157, 107, 255, 0.10); }

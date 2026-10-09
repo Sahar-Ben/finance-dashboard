@@ -195,6 +195,13 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
     - **More** links to Fixed payments and Goals. People, emails and default currency fold into "People & sign-in".
     - **Trends**: a month with no bank balance is a gap in Reachable money, not ₪0.
 
+30. **UX pass, second round** (requested after change 29).
+    - **Update** follows the chosen account and month: the heading ("Next up · 3 of 40" or "Balance"), the button (Save & next / Save balance) and Skip change as soon as the account or month changes. "Start updating" on the Overview always opens the list from its start. While on Update, the tab it was opened from stays lit.
+    - **Account details**: the main button opens Update on that account's oldest missing month ("Add Jan 26", with "5 months missing" above it), or this month when nothing is missing. History rows are tappable; correcting and deleting a balance happen in the balance editor, which has a "Delete this balance" button.
+    - **Explain**: "What was it?" is a list of tappable choices with a one-line hint each, ordered by the direction of the gap (money in: Extra income first; money out: Spending first). Choosing one scrolls to its fields. After saving or removing a part, the panel reopens with the amount still to explain until everything is explained ("everything explained ✓").
+    - **Add/Edit account**: a one-line explanation under each type; "Name" and "Bank or company" (optional for a home); "Update on day" is optional (empty = from the 1st); "Update in month" for homes; the account ID moves behind "Account ID (set automatically)" and is made from the name. After adding an account, a panel offers to enter its first balance (or month total) now.
+    - Accounts grouped by bank put accounts without one under "Other".
+
 ## How to work
 
 Build one stage at a time. After each stage: update SPEC.md, commit, merge to main, and give a plain-language test checklist. Wait for the go-ahead before the next stage.
