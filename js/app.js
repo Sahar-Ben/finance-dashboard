@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.09-3";
+  const APP_VERSION = "2026.10.09-4";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
@@ -728,17 +728,22 @@
           <div class="spread small"><span>${updated} of ${monthly.length} updated for ${Calc.monthLabel(nowM, true)}</span>
             ${dueCount ? `<span class="chip warn">${dueCount} to update</span>` : updated === monthly.length ? `<span class="chip pos">Up to date</span>` : `<span class="chip">Nothing due yet</span>`}</div>
           <div class="bar"><span style="width:${monthly.length ? Math.max(updated ? 2 : 0, (updated / monthly.length) * 100).toFixed(1) : 0}%"></span></div>
-          ${dueCount ? `<a class="btn block" href="#update">Update now</a>` : ""}
+          ${dueCount ? `<div class="stack" style="gap:8px">
+            <div class="label">Needs a balance for ${Calc.monthLabel(nowM, true)}</div>
+            ${accts.filter((a) => statuses.get(a.id).kind === "due").map((a) => `
+              <button class="due-item" data-update="${esc(a.id)}">
+                <span><span class="due-name">${accountName(a)}</span>
+                  <span class="muted small mono">${esc(statuses.get(a.id).text)} · by ${esc(a.updater || a.owner)}</span></span>
+                <span class="row"><span class="chip warn">Update</span><span class="chev">›</span></span>
+              </button>`).join("")}
+          </div>` : ""}
         </div>
         ${bankCards}
         <p class="muted small">Bank accounts only (savings, investments, pension, home and loans are on the Overview; cards on the Cards tab). Totals use each account's latest balance, converted with that month's rate. Green = updated this month, orange = due, grey = not due yet.</p>
       </div>`;
     Charts.bind($screen);
     bindCurSeg();
-    // Groups start collapsed; the ones opened stay open while the app is open.
-    $screen.querySelectorAll(".acct-group").forEach((d) => d.addEventListener("toggle", () => {
-      if (d.open) state.acctOpen.add(d.dataset.key); else state.acctOpen.delete(d.dataset.key);
-    }));
+    $screen.querySelectorAll("[data-update]").forEach((b) => b.addEventListener("click", () => openManualFor(b.dataset.update, nowM)));
     $screen.querySelectorAll("[data-acct]").forEach((b) => b.addEventListener("click", () => {
       const a = state.accounts.find((x) => String(x.id) === b.dataset.acct);
       if (a) openAccountDetail(a);
@@ -2150,24 +2155,19 @@
   const IMPORT_COLUMNS = "month | account_id | amount | currency | as_of_date";
 
   function renderUpdate() {
-    const mode = state.updateMode || "import";
+    const mode = state.updateMode === "import" ? "import" : "manual";
     $screen.innerHTML = `
       <div class="page-head">
-        <div><div class="label">Monthly update</div><h1>Update</h1></div>
+        <div><div class="label">Monthly update</div><h1>${mode === "import" ? "Paste rows" : "Update"}</h1></div>
         <a class="btn small" href="#overview">Done</a>
       </div>
       <div class="stack-lg">
-        <div class="seg" id="up-mode">
-          <button type="button" data-mode="import" aria-pressed="${mode === "import"}">PASTE ROWS</button>
-          <button type="button" data-mode="manual" aria-pressed="${mode === "manual"}">ONE BALANCE</button>
-        </div>
         <div id="up-body"></div>
+        <button type="button" class="link-btn" id="up-switch" style="align-self:center">${mode === "import" ? "‹ Back to one balance" : "Paste many rows at once instead"}</button>
       </div>`;
-    document.getElementById("up-mode").addEventListener("click", (e) => {
-      const b = e.target.closest("[data-mode]");
-      if (!b || b.dataset.mode === mode) return;
+    document.getElementById("up-switch").addEventListener("click", () => {
       if (mode === "import") state.imp.text = document.getElementById("imp-text").value;
-      state.updateMode = b.dataset.mode;
+      state.updateMode = mode === "import" ? "manual" : "import";
       renderUpdate();
     });
     if (mode === "import") renderImport(); else renderManual();
@@ -2412,8 +2412,23 @@
       body.innerHTML = `<div class="card empty stack"><p class="muted">Add accounts first, on the Accounts tab.</p><a class="btn block" href="#accounts">Go to Accounts</a></div>`;
       return;
     }
-    body.innerHTML = `
-      <form id="man-form" class="card stack-lg" novalidate>
+    // What still needs a balance: tapping one fills the form below with that account and month.
+    const due = dueItems();
+    const isPicked = (d) => keep.account_id === d.account.id && (keep.month || Calc.currentMonth()) === d.month;
+    const todo = due.length ? `
+      <div class="card notice stack">
+        <div class="spread"><div class="label">To do · ${due.length}</div><span class="muted small">Tap one to fill it in</span></div>
+        <div class="stack" style="gap:8px">${due.map((d, i) => `
+          <button type="button" class="due-item${isPicked(d) ? " picked" : ""}" data-pick="${i}">
+            <span><span class="due-name">${accountName(d.account)}</span>
+              <span class="muted small mono">${Calc.monthLabel(d.month, true)} · ${esc(TYPE_LABEL[lower(d.account.type)] || d.account.type)}</span></span>
+            <span class="row">${isPicked(d) ? `<span class="chip accent">Selected</span>` : d.overdue ? `<span class="chip neg">Overdue</span>` : `<span class="chip warn">Due</span>`}</span>
+          </button>`).join("")}</div>
+      </div>` : `
+      <div class="card stack"><div class="spread"><div class="label">To do</div><span class="chip pos">All up to date</span></div>
+        <p class="muted small">Nothing is due right now. You can still enter any balance below.</p></div>`;
+    body.innerHTML = `${todo}
+      <form id="man-form" class="card stack-lg" novalidate style="margin-top:16px">
         <div class="field"><label class="label" for="man-acct">Account</label>
           <select id="man-acct">
             <optgroup label="Mine & joint">${options(mine.map((a) => [a.id, label(a)]), keep.account_id)}</optgroup>
@@ -2471,6 +2486,18 @@
     [$acct, $month, $amount, $date].forEach((el) => el.addEventListener("input", updateContext));
     $acct.addEventListener("change", updateContext);
     updateContext();
+    body.querySelectorAll("[data-pick]").forEach((b) => b.addEventListener("click", () => {
+      const d = due[Number(b.dataset.pick)];
+      if (!mine.some((a) => a.id === d.account.id)) state.manualShowAll = true;
+      state.manualDraft = {
+        account_id: d.account.id, month: d.month,
+        as_of_date: d.month === Calc.currentMonth() ? Calc.today() : Calc.lastDayOfMonth(d.month),
+      };
+      renderManual();
+      const amt = document.getElementById("man-amount");
+      amt.scrollIntoView({ behavior: "smooth", block: "center" });
+      amt.focus();
+    }));
     const allBtn = document.getElementById("man-all");
     if (allBtn) allBtn.addEventListener("click", () => { state.manualShowAll = !showAll; state.manualDraft = draft(); renderManual(); });
 

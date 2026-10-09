@@ -181,6 +181,8 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 
 25. **Collapsible account groups** (requested after change 24). On Accounts, each group (by institution, country or owner) starts collapsed, showing its name, count and net total. Tapping the group's title opens or closes it, and an arrow shows which. Opened groups stay open while the app is open. Inactive accounts work the same way.
 
+26. **Clear what to update** (requested after change 25). On Banks, the status card lists each bank account that needs a balance this month (name, due since, who updates it) instead of a general "Update now" button; tapping one opens the One balance form with that account and month filled in. The Update screen shows One balance only, with the person's **To do** list above the form: tapping an item selects it (highlighted), fills in the account, month and as-of date, and puts the cursor in Amount. After saving, the list refreshes. When nothing is due it says "All up to date". Pasting many rows is still available behind a small link at the bottom.
+
 ## How to work
 
 Build one stage at a time. After each stage: update SPEC.md, commit, merge to main, and give a plain-language test checklist. Wait for the go-ahead before the next stage.
