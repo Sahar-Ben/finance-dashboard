@@ -185,6 +185,8 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
 
 27. **Missing months of the whole year** (requested after change 26). To do now also lists every earlier month of the current year that has no balance, from January (or from the account's first balance if that is older; a loan only from its start month), not only months after the first balance entered. To do shows one row per account: one month ("Oct 2026"), or "9 months missing · from Jan 2026". The count is the number of balances missing. Tapping a row opens the oldest missing month; after saving, the row moves on to the next missing month ("Feb 2026 · 7 more after this").
 
+28. **View switch: Me / the other person / Both** (requested after change 27). Overview, Banks, Spending (with Savings) and Trends have a switch next to the currency switch, labelled ME, the other person's name (from Settings) and BOTH, remembered on the device (`fd.view`). Me: own accounts in full + 50% of joint (as before). Other person: the same rule for them. Both: every account and payment in full. Labels follow the view ("My / Name's / Our reachable money", "your / Name's 50%"). Savings counts the explanations of the person shown, or of both; an own transfer's effect is recomputed for the view (moved × (share of To − share of From)), so in Both a move between household accounts counts 0. Adding explanations is only offered in Me. Entering data, To do and the Accounts tab do not change with the view.
+
 ## How to work
 
 Build one stage at a time. After each stage: update SPEC.md, commit, merge to main, and give a plain-language test checklist. Wait for the go-ahead before the next stage.

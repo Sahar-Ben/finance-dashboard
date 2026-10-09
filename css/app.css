@@ -79,7 +79,7 @@ p { margin: 0; }
 
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 8px 0 20px; }
 .page-head > div:first-child { min-width: 0; }
-.cur-row { display: flex; justify-content: flex-end; margin: -8px 0 16px; }
+.cur-row { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin: -8px 0 16px; }
 .page-head .label { margin-bottom: 6px; }
 .stack { display: flex; flex-direction: column; gap: 12px; }
 .stack-lg { display: flex; flex-direction: column; gap: 20px; }

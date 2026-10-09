@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.09-5";
+  const APP_VERSION = "2026.10.09-6";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
@@ -33,6 +33,7 @@
 
   const state = {
     acctOpen: new Set(), // account groups opened on the Accounts tab
+    view: ["me", "other", "both"].includes(LS.get("fd.view")) ? LS.get("fd.view") : "me", // whose money the screens show
     gisReady: false,
     token: null,
     tokenExp: 0,
@@ -600,7 +601,7 @@
     if (!banks.length) return "";
     let sum = 0;
     const rows = banks.map((a) => {
-      const f = myShare(a);
+      const f = viewShare(a);
       const known = ownerOf(a);
       const s = idx.get(norm(a.id), month);
       const own = s ? (norm(s.currency).toUpperCase() || norm(a.currency).toUpperCase()) : norm(a.currency).toUpperCase();
@@ -610,7 +611,7 @@
       if (counted != null) sum += counted;
       const shareTxt = f === 1 ? "100%" : f === 0.5 ? "50%" : "0%";
       const why = !known ? `<span class="warn-text">owner "${esc(a.owner || "empty")}" not recognised, counted as Joint. Fix it in Edit account.</span>`
-        : f === 0 ? "the other person's account" : f === 0.5 ? "joint" : "yours";
+        : viewMode() === "both" ? (lower(known) === lower(JOINT) ? "joint" : "in full") : f === 0 ? `not ${viewMode() === "other" ? esc(viewPerson().name) + "'s" : "yours"}` : f === 0.5 ? "joint" : viewMode() === "other" ? `${esc(viewPerson().name)}'s` : "yours";
       return `<li>
         <div><div>${accountName(a)}</div><div class="muted small">${esc(known || a.owner || "—")} · ${shareTxt} · ${why}</div></div>
         <div class="acct-right">${s ? `<div class="mono small">${esc(fmtMoney(amt, own))}</div><div class="mono ${f ? "" : "muted"}">${f ? esc(fmtMoney(counted, cur)) : "not counted"}</div>`
@@ -621,7 +622,7 @@
       <details class="calc">
         <summary class="link-btn">How this is calculated</summary>
         <ul class="plain-list loan-list" style="margin-top:8px">${rows}</ul>
-        <div class="spread commit"><span>Counted for you</span><span class="mono">${esc(fmtMoney(sum, cur))}</span></div>
+        <div class="spread commit"><span>Counted ${viewMode() === "both" ? "for both of you" : viewMode() === "other" ? `for ${esc(viewPerson().name)}` : "for you"}</span><span class="mono">${esc(fmtMoney(sum, cur))}</span></div>
         <p class="muted small">Only accounts of type Bank count as reachable money, using the balance entered for ${esc(Calc.monthLabel(month, true))}. Savings and other types are in the long-term total.</p>
       </details>`;
   }
@@ -630,6 +631,41 @@
     const o = matchName(a.owner, [...personNames(), JOINT]) || JOINT;
     return o === state.me.name ? 1 : o === JOINT ? 0.5 : 0;
   }
+
+  // ---------- View: whose money the screens show ----------
+  // "me": own in full + half of joint; "other": the other person, same rule; "both": everything in full.
+  // Entering data (balances, explanations, To do) always stays with the signed-in person.
+  const otherPerson = () => people().find((p) => p.name && p.name !== state.me.name) || null;
+  const viewPerson = () => (state.view === "other" && otherPerson() ? otherPerson() : state.me);
+  const viewMode = () => (state.view === "both" ? "both" : state.view === "other" && otherPerson() ? "other" : "me");
+  function viewShare(a) {
+    if (viewMode() === "both") return 1;
+    const o = matchName(a.owner, [...personNames(), JOINT]) || JOINT;
+    return o === viewPerson().name ? 1 : o === JOINT ? 0.5 : 0;
+  }
+  // The people whose explanations count in this view.
+  const viewOwners = () => (viewMode() === "both" ? people().map((p) => p.name).filter(Boolean) : [viewPerson().name]);
+  // "your" / "Name's" for share notes; null in the both view (everything is in full).
+  const viewPoss = () => (viewMode() === "both" ? null : viewMode() === "other" ? `${viewPerson().name}'s` : "your");
+  const viewNote = () => (viewMode() === "both" ? "Both of you: every account in full"
+    : `${viewMode() === "other" ? `${esc(viewPerson().name)}'s` : "Your"} accounts in full + 50% of joint accounts`);
+  const viewMy = () => (viewMode() === "both" ? "Our" : viewMode() === "other" ? `${esc(viewPerson().name)}'s` : "My");
+  function viewSegHtml() {
+    const o = otherPerson();
+    if (!o) return "";
+    const opts = [["me", "ME"], ["other", o.name.toUpperCase()], ["both", "BOTH"]];
+    return `<div class="seg seg-sm" data-view-seg>${opts.map(([k, l]) =>
+      `<button type="button" data-viewk="${k}" aria-pressed="${k === viewMode()}">${esc(l)}</button>`).join("")}</div>`;
+  }
+  $screen.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-viewk]");
+    if (!b || b.dataset.viewk === viewMode()) return;
+    state.view = b.dataset.viewk;
+    LS.set("fd.view", state.view);
+    const y = window.scrollY;
+    route();
+    window.scrollTo(0, y);
+  });
 
   function renderBanks() {
     const cur = state.displayCur;
@@ -643,7 +679,7 @@
       <div class="page-head">
         <div><div class="label">Status · ${Calc.monthLabel(nowM, true)}</div><h1>Banks</h1></div>
       </div>
-      <div class="cur-row">${curSegHtml()}</div>`;
+      <div class="cur-row">${viewSegHtml()}${curSegHtml()}</div>`;
     if (!accts.length) {
       $screen.innerHTML = `${head}
         <div class="card empty stack"><p class="muted">No bank accounts yet. Add them on the Accounts tab with type Bank.</p>
@@ -666,7 +702,7 @@
     let myNet = null;
     accts.forEach((a) => {
       const info = latestInfo(a, idx);
-      const f = myShare(a);
+      const f = viewShare(a);
       if (!f || !info || info.converted == null) return;
       myNet = (myNet || 0) + info.converted * f;
     });
@@ -722,9 +758,9 @@
     $screen.innerHTML = `${head}
       <div class="stack-lg">
         <div class="card hero stack">
-          <div class="label">My bank accounts · latest balances</div>
+          <div class="label">${viewMode() === "both" ? "Our" : viewMode() === "other" ? `${esc(viewPerson().name)}'s` : "My"} bank accounts · latest balances</div>
           <div class="big-number">${myNet != null ? esc(fmtMoney(myNet, cur)) : "—"}</div>
-          <div class="muted small">Your accounts in full + 50% of joint accounts${allNet != null && allNet !== myNet ? ` · all accounts, full amounts: <span class="mono">${esc(fmtMoney(allNet, cur))}</span>` : ""}</div>
+          <div class="muted small">${viewNote()}${allNet != null && allNet !== myNet ? ` · all accounts, full amounts: <span class="mono">${esc(fmtMoney(allNet, cur))}</span>` : ""}</div>
           <div class="spread small"><span>${updated} of ${monthly.length} updated for ${Calc.monthLabel(nowM, true)}</span>
             ${dueCount ? `<span class="chip warn">${dueCount} to update</span>` : updated === monthly.length ? `<span class="chip pos">Up to date</span>` : `<span class="chip">Nothing due yet</span>`}</div>
           <div class="bar"><span style="width:${monthly.length ? Math.max(updated ? 2 : 0, (updated / monthly.length) * 100).toFixed(1) : 0}%"></span></div>
@@ -803,14 +839,24 @@
     return `${esc(explLabel(x.cat))}${c ? ` · ${accountName(c)}` : ""}${norm(r.note) ? ` · ${esc(r.note)}` : ""}`;
   }
 
-  // My explanations for a month, converted to the display currency: [{ row, cat, amount (signed), gross }].
-  function explainedFor(month, cur) {
-    const me = lower(state.me.name);
-    return (state.explained || []).filter((r) => Calc.normMonth(r.month) === month && lower(r.owner) === me && EXPL_CATS[lower(r.category)])
+  // Explanations for a month by `owners` (default: the signed-in person), in the display currency:
+  // [{ row, cat, amount (signed), gross }]. With `share`, an own transfer's effect is recomputed for that
+  // view: moved × (share of To − share of From), so in the both view a move between household accounts is 0.
+  function explainedFor(month, cur, owners, share) {
+    const who = (owners || [state.me.name]).map(lower);
+    return (state.explained || []).filter((r) => Calc.normMonth(r.month) === month && who.includes(lower(r.owner)) && EXPL_CATS[lower(r.category)])
       .map((r) => {
         const c = norm(r.currency).toUpperCase() || "ILS";
         const conv = (v) => (isFinite(v) ? Calc.convert(v, c, cur, state.rates, month) : null);
-        return { row: r, cat: lower(r.category), amount: conv(Calc.parseAmount(r.amount)), gross: conv(Calc.parseAmount(r.gross)) };
+        const cat = lower(r.category);
+        const gross = conv(Calc.parseAmount(r.gross));
+        let amount = conv(Calc.parseAmount(r.amount));
+        if (share && cat === "own_transfer" && gross != null) {
+          const f = state.accounts.find((a) => a.id === norm(r.from_account));
+          const t = state.accounts.find((a) => a.id === norm(r.to_account));
+          if (f && t) amount = gross * (share(t) - share(f));
+        }
+        return { row: r, cat, amount, gross };
       }).filter((x) => x.amount != null);
   }
   const explSum = (list, affects) => list.filter((x) => EXPL_CATS[x.cat].affects === affects).reduce((t, x) => t + x.amount, 0);
@@ -960,7 +1006,7 @@
       <div class="page-head">
         <div><div class="label">Cards & fixed payments</div><h1>Spending</h1></div>
       </div>
-      <div class="cur-row">${curSegHtml()}</div>`;
+      <div class="cur-row">${viewSegHtml()}${curSegHtml()}</div>`;
     const salaries = state.accounts.filter((a) => lower(a.type) === "salary");
     const salaryIds = new Set(salaries.map((a) => norm(a.id)));
     const cardMonths = [...new Set(state.snapshots.filter((s) => cardIds.has(norm(s.account_id)) || salaryIds.has(norm(s.account_id)))
@@ -1000,7 +1046,7 @@
       return display ? conv(v, own, m) : v;
     };
     // Personal share: own in full, joint half, the partner's own not at all (household = everything in full).
-    const shareOf = myShare;
+    const shareOf = viewShare;
     const cardsTotal = (m, household) => {
       let sum = 0, any = false;
       cards.forEach((a) => {
@@ -1068,14 +1114,14 @@
           const by = p.kind === "loan" ? paidFromName(norm(p.account.linked_account)) : paidFromName(p.paid_from);
           const sign = p.income ? "+" : "";
           return `<li ${p.kind === "fixed" ? `class="tap" data-fx-month="${esc(p.id)}"` : ""}>
-            <div><div>${esc(p.name)}${p.oneMonth ? ` <span class="chip warn">this month only</span>` : ""}</div><div class="muted small">${p.kind === "loan" ? "loan payment" : `${p.income ? "income · " : ""}${esc(p.owner || JOINT)}`}${p.day ? ` · day ${esc(p.day)}` : ""}${by ? ` · ${p.income ? "into" : "from"} ${by}` : ""}${f === 0.5 ? " · your 50%" : f === 0 ? " · not yours" : ""}</div></div>
+            <div><div>${esc(p.name)}${p.oneMonth ? ` <span class="chip warn">this month only</span>` : ""}</div><div class="muted small">${p.kind === "loan" ? "loan payment" : `${p.income ? "income · " : ""}${esc(p.owner || JOINT)}`}${p.day ? ` · day ${esc(p.day)}` : ""}${by ? ` · ${p.income ? "into" : "from"} ${by}` : ""}${f === 0.5 ? ` · ${esc(viewPoss())} 50%` : f === 0 ? ` · not ${viewMode() === "other" ? esc(viewPerson().name) + "'s" : "yours"}` : ""}</div></div>
             <div class="acct-right"><div class="mono ${p.income ? "pos" : ""}">${sign}${esc(fmtMoney(p.amount, p.currency))}</div>
               ${f === 0.5 ? `<div class="acct-orig mono">${sign}${esc(fmtMoney(p.amount / 2, p.currency))}</div>` : ""}</div>
           </li>`;
         }).join("")}</ul>
         <p class="muted small">Tap a payment to change its amount for ${esc(Calc.monthLabel(month, true))} only.</p>
-        <div class="spread commit"><span>My fixed payments</span><span class="mono">${esc(fmtMoney(myFixedM || 0, cur))}</span></div>
-        ${myIncomeM ? `<div class="spread"><span>My fixed income</span><span class="mono pos">+${esc(fmtMoney(myIncomeM, cur))}</span></div>` : ""}`
+        <div class="spread commit"><span>${viewMy()} fixed payments</span><span class="mono">${esc(fmtMoney(myFixedM || 0, cur))}</span></div>
+        ${myIncomeM ? `<div class="spread"><span>${viewMy()} fixed income</span><span class="mono pos">+${esc(fmtMoney(myIncomeM, cur))}</span></div>` : ""}`
         : `<p class="muted">No fixed payments for this month. Add rent, parking and similar under Manage.</p>`}
       </div>`;
 
@@ -1096,7 +1142,7 @@
               </div>
             </div>
             <div class="muted small mono">${Calc.monthLabel(month, true)}${cAvg != null ? ` · average ${esc(fmtMoney(cAvg, own))} / month in ${year}` : ""}</div>
-            ${shareOf(a) === 0.5 && v != null ? `<div class="muted small">Joint · your 50%: <span class="mono">${esc(fmtMoney(v / 2, own))}</span></div>` : ""}
+            ${shareOf(a) === 0.5 && v != null ? `<div class="muted small">Joint · ${esc(viewPoss())} 50%: <span class="mono">${esc(fmtMoney(v / 2, own))}</span></div>` : ""}
             ${Charts.bars({ labels, values: vals, avg: cAvg, highlight: yearMonths.indexOf(month), fmtTick: fmtTickFor(own),
               tips: yearMonths.map((m, i) => `${Calc.monthLabel(m, true)} · ${vals[i] != null ? fmtMoney(vals[i], own) : "no total"}`), ariaLabel: `${norm(a.nickname)} by month` })}
           </div>`;
@@ -1137,7 +1183,7 @@
     const CASH_TYPES = ["current", "savings", "investment"];
     const cashAccounts = state.accounts.filter((a) => CASH_TYPES.includes(lower(a.type)));
     const balMonths = Calc.snapshotMonths(state.snapshots, state.accounts).balances;
-    const cashAt = (m, rateMonth) => Calc.monthTotals(cashAccounts, idx, m, cur, state.rates, balMonths[0] || null, rateMonth, myShare);
+    const cashAt = (m, rateMonth) => Calc.monthTotals(cashAccounts, idx, m, cur, state.rates, balMonths[0] || null, rateMonth, viewShare);
     const cashChange = (m) => {
       const now = cashAt(m, m), prev = cashAt(Calc.shiftMonth(m, -1), m);
       if (!now.hasBalances || !prev.hasBalances || now.incomplete || prev.incomplete || now.notDue.length) return null;
@@ -1160,7 +1206,7 @@
       const pm = Calc.shiftMonth(m, -1);
       let sum = 0;
       const items = [];
-      state.accounts.filter((a) => lower(a.type) === "loan" && myShare(a) > 0).forEach((a) => {
+      state.accounts.filter((a) => lower(a.type) === "loan" && viewShare(a) > 0).forEach((a) => {
         const now = idx.get(norm(a.id), m);
         if (!now) return;
         const prev = idx.get(norm(a.id), pm);
@@ -1171,20 +1217,20 @@
         if (!(up > 0)) return;
         const v = Calc.convert(up, own, cur, state.rates, m);
         if (v == null) return;
-        sum += v * myShare(a);
+        sum += v * viewShare(a);
         items.push(accountName(a));
       });
       return { sum, items };
     };
     const salarySeries = yearMonths.map(salaryTotal);
     // Explanations: income / paid back / spending-not-on-card change "saved from income"; transfers and investments don't.
-    const explSeries = yearMonths.map((m) => explSum(explainedFor(m, cur), true));
+    const explSeries = yearMonths.map((m) => explSum(explainedFor(m, cur, viewOwners(), viewShare), true));
     const savedSeries = yearMonths.map((m, i) => (salarySeries[i] == null ? null
       : salarySeries[i] + (incomeSeries[i] || 0) - (totals[i] || 0) + explSeries[i]));
     const mi = yearMonths.indexOf(month);
     const salM = mi >= 0 ? salarySeries[mi] : salaryTotal(month);
     const inM = (salM || 0) + (myIncomeM || 0);
-    const explM = explainedFor(month, cur);
+    const explM = explainedFor(month, cur, viewOwners(), viewShare);
     const explAffM = explSum(explM, true);
     const explNeutralM = explSum(explM, false);
     const savedM = salM == null ? null : inM - (total || 0) + explAffM;
@@ -1203,7 +1249,7 @@
     // Why is it unexplained? Per account (full amounts): actual change vs the flows linked to it.
     function accountBreakdown(m) {
       const pm = Calc.shiftMonth(m, -1);
-      const accts = cashAccounts.filter((a) => myShare(a) > 0 && (isActive(a) || idx.get(norm(a.id), m)));
+      const accts = cashAccounts.filter((a) => viewShare(a) > 0 && (isActive(a) || idx.get(norm(a.id), m)));
       const conv = (v, c) => (isFinite(v) ? Calc.convert(v, c, cur, state.rates, m) : null);
       const flows = new Map(accts.map((a) => [a.id, []]));
       const unlinked = [];
@@ -1216,17 +1262,17 @@
       state.accounts.forEach((a) => {
         const t = lower(a.type);
         if (t !== "salary" && t !== "card") return;
-        if (!myShare(a)) return;
+        if (!viewShare(a)) return;
         const sn = idx.get(norm(a.id), m);
         if (!sn) return;
         const v = conv(Calc.parseAmount(sn.amount), own(a, sn));
         add(norm(a.linked_account), norm(a.nickname) || a.id, t === "salary" ? v : v == null ? null : -v);
       });
-      Calc.fixedForMonth(plainFixed(), m).filter((p) => myShare(p) > 0).forEach((p) => {
+      Calc.fixedForMonth(plainFixed(), m).filter((p) => viewShare(p) > 0).forEach((p) => {
         const v = conv(p.amount, p.currency);
         add(p.paid_from, p.name, p.income ? v : v == null ? null : -v);
       });
-      state.accounts.filter((a) => lower(a.type) === "loan" && myShare(a) > 0).forEach((a) => {
+      state.accounts.filter((a) => lower(a.type) === "loan" && viewShare(a) > 0).forEach((a) => {
         const pay = loanPayment(a, m, idx);
         if (pay != null) add(norm(a.linked_account), `${norm(a.nickname) || a.id} payment`, -conv(pay, norm(a.currency).toUpperCase() || "ILS"));
         // New loan money is paid into the linked account.
@@ -1236,7 +1282,7 @@
           if (up > 0) add(norm(a.linked_account), `${norm(a.nickname) || a.id} (new loan money)`, conv(up, own(a, now)));
         }
       });
-      explainedFor(m, cur).filter((x) => x.cat === "own_transfer" && x.gross != null).forEach((x) => {
+      explainedFor(m, cur, viewOwners(), viewShare).filter((x) => x.cat === "own_transfer" && x.gross != null).forEach((x) => {
         add(norm(x.row.from_account), `Transfer out (explained)`, -x.gross);
         add(norm(x.row.to_account), `Transfer in (explained)`, x.gross);
       });
@@ -1257,9 +1303,9 @@
       return `
         <details class="calc">
           <summary class="link-btn">Why? Show it per account</summary>
-          <p class="muted small" style="margin:6px 0">Each account's real change against what you entered for it (full amounts, not your 50% share). The difference is where the unexplained money is.</p>
+          <p class="muted small" style="margin:6px 0">Each account's real change against what you entered for it (full amounts, not the 50% share of joint ones). The difference is where the unexplained money is.</p>
           <ul class="plain-list loan-list">${b.rows.map((r) => r.missing ? `<li><span>${accountName(r.a)}</span><span class="small warn-text">balance missing</span></li>` : `
-            <li><div><div>${accountName(r.a)}${myShare(r.a) === 0.5 ? ` <span class="muted small">(joint)</span>` : ""}</div>
+            <li><div><div>${accountName(r.a)}${(ownerOf(r.a) || JOINT) === JOINT ? ` <span class="muted small">(joint)</span>` : ""}</div>
               <div class="muted small">changed ${amt(r.actual)} · expected ${amt(r.expected)}${r.items.length ? ` (${r.items.map(line).join(", ")})` : " (nothing linked)"}</div></div>
               <div class="acct-right"><div class="mono ${Math.abs(r.diff) < 1 ? "muted" : r.diff > 0 ? "pos" : "neg"}">${Math.abs(r.diff) < 1 ? "✓" : esc(fmtSigned(r.diff, cur))}</div>
               <div class="acct-orig">${Math.abs(r.diff) < 1 ? "matches" : "unexplained"}</div></div></li>`).join("")}</ul>
@@ -1272,7 +1318,7 @@
         <p class="muted">To see how much you save each month, add a <strong>Salary</strong> account (Accounts → + Add → Type: Salary) and enter each month's net salary with Update, like a card total.</p>
       </div>` : `
       <div class="card stack">
-        <div class="label">My savings · ${Calc.monthLabel(month, true)}</div>
+        <div class="label">${viewMy()} savings · ${Calc.monthLabel(month, true)}</div>
         ${savedM == null ? `<p class="muted">No salary entered for ${Calc.monthLabel(month, true)} yet. Add it with Update to see what you saved.</p><a class="btn block" href="#update">Update</a>` : `
         <div class="kpi-grid">
           <div><div class="mid-number ${savedM >= 0 ? "pos" : "neg"}">${esc(signed(savedM))}</div>
@@ -1311,7 +1357,8 @@
         ${otherM != null ? `<div class="spread commit"><span>${Math.abs(otherM) < 1 ? "Everything explained" : otherM >= 0 ? "Unexplained money in" : "Unexplained money out"}</span><span class="mono ${Math.abs(otherM) < 1 ? "muted" : otherM >= 0 ? "pos" : "neg"}">${Math.abs(otherM) < 1 ? "✓" : `${otherM >= 0 ? "+" : "−"}${esc(fmtMoney(Math.abs(otherM), cur))}`}</span></div>
         ${Math.abs(otherM) >= 1 ? `<div class="muted small">${otherM >= 0 ? "e.g. extra income, friends paying you back, transfers in, investment gains." : "e.g. cash, Bit, transfers out, investment losses."} Tell the app what it was to make your savings exact.</div>` : ""}
         ${Math.abs(otherM) >= 1 ? breakdownHtml(month) : ""}
-        <button type="button" class="btn block" id="sv-explain">${explM.length ? "Explain / edit" : "Explain this"}</button>` : ""}`}
+        ${viewMode() === "me" ? `<button type="button" class="btn block" id="sv-explain">${explM.length ? "Explain / edit" : "Explain this"}</button>`
+          : `<div class="muted small">Switch to ME to add your explanations.</div>`}` : ""}`}
       </div>`;
     const SPEND_COLORS = { cards: Charts.TYPE_COLORS.current, fixed: Charts.TYPE_COLORS.savings };
     const INCOME_COLOR = "#5BE3A7";
@@ -1358,13 +1405,13 @@
       <div class="stack-lg">
         ${sel}
         <div class="card hero stack">
-          <div class="label">My spending · ${Calc.monthLabel(month, true)}</div>
+          <div class="label">${viewMy()} spending · ${Calc.monthLabel(month, true)}</div>
           <div class="big-number">${esc(fmtMoney(total, cur))}</div>
           <div class="muted small mono">Cards ${esc(fmtMoney(myCardsM || 0, cur))} · Fixed ${esc(fmtMoney(myFixedM || 0, cur))}</div>
           ${myIncomeM ? `<div class="spread net-line"><span>Fixed income <span class="mono pos">+${esc(fmtMoney(myIncomeM, cur))}</span></span>
             <span>Net spending <span class="mono">${esc(fmtMoney((total || 0) - myIncomeM, cur))}</span></span></div>` : ""}
           ${kpiHtml}
-          <div class="muted small">Your own in full + 50% of joint${avg != null ? ` · average ${esc(fmtMoney(avg, cur))} / month in ${year}` : ""}</div>
+          <div class="muted small">${viewNote()}${avg != null ? ` · average ${esc(fmtMoney(avg, cur))} / month in ${year}` : ""}</div>
           ${household != null && household !== total ? `<div class="muted small">Household, full amounts: <span class="mono">${esc(fmtMoney(household, cur))}</span></div>` : ""}
           ${missing.length ? `<div class="muted small">Card totals missing this month: ${missing.map(accountName).join(", ")}</div>` : ""}
           <div class="seg seg-sm" id="sp-view" style="align-self:flex-start">
@@ -1712,7 +1759,7 @@
     const end = latestBal && latestBal > nowM ? latestBal : nowM;
     const start = period === "year" ? `${nowM.slice(0, 4)}-01` : period === "12m" ? Calc.shiftMonth(end, -11) : (firstBal || nowM);
     const range = Calc.monthRange(start, end);
-    const T = range.map((m) => Calc.monthTotals(state.accounts, idx, m, cur, state.rates, latestBal));
+    const T = range.map((m) => Calc.monthTotals(state.accounts, idx, m, cur, state.rates, latestBal, null, viewShare));
     const labels = range.map((m) => (period === "year" ? MONTHS[Number(m.slice(5)) - 1] : Calc.monthLabel(m)));
     const inc = T.map((t) => t.hasBalances && t.incomplete);
     const series = (field) => T.map((t) => (t.hasBalances ? t[field] : null));
@@ -1727,7 +1774,7 @@
       <div class="page-head">
         <div><div class="label">History</div><h1>Trends</h1></div>
       </div>
-      <div class="cur-row">${curSegHtml()}</div>
+      <div class="cur-row">${viewSegHtml()}${curSegHtml()}</div>
       <div class="stack-lg">
         <div class="seg" id="tr-period">${Object.entries(PERIODS).map(([k, l]) =>
           `<button type="button" data-period="${k}" aria-pressed="${k === period}">${l.toUpperCase()}</button>`).join("")}</div>
@@ -1955,15 +2002,16 @@
     if (!state.ovMonth || !months.all.includes(state.ovMonth)) state.ovMonth = latestBal || months.all[0] || null;
     const month = state.ovMonth;
     const idx = Calc.indexSnapshots(state.snapshots);
-    // Personal view: own accounts in full, joint at 50%, the partner's own accounts left out.
-    const totalsFor = (m, rateMonth) => Calc.monthTotals(state.accounts, idx, m, cur, state.rates, latestBal, rateMonth, myShare);
+    // The chosen view: one person (own in full, joint at 50%) or both of you (everything in full).
+    const totalsFor = (m, rateMonth) => Calc.monthTotals(state.accounts, idx, m, cur, state.rates, latestBal, rateMonth, viewShare);
 
     const due = dueItems();
     const head = `
       <div class="page-head">
         <div><div class="label">Hi, ${esc(state.me.name)}</div><h1>Overview</h1></div>
         <a class="btn primary small badge-host" href="#update">Update${due.length ? `<span class="badge" aria-label="${due.length} due">${due.length}</span>` : ""}</a>
-      </div>`;
+      </div>
+      ${viewSegHtml() ? `<div class="cur-row">${viewSegHtml()}</div>` : ""}`;
     const goals = (state.goals || []).filter(goalsActive);
     const goalsSection = goals.length ? `
       <div><div class="group-title"><span class="label">Goals</span><a class="label link" href="#goals">Manage ›</a></div>
@@ -2018,14 +2066,14 @@
     const incompleteChip = t.incomplete && t.hasBalances ? `<span class="chip neg">Incomplete</span>` : "";
     const hero = t.hasBalances ? `
       <div class="card hero stack">
-        <div class="spread"><div class="label">My reachable money · ${Calc.monthLabel(month, true)}</div>${incompleteChip}</div>
+        <div class="spread"><div class="label">${viewMy()} reachable money · ${Calc.monthLabel(month, true)}</div>${incompleteChip}</div>
         <div class="big-number">${fmtMoney(t.reachable, cur)}</div>
-        <div class="muted small">Your accounts in full + 50% of joint accounts</div>
+        <div class="muted small">${viewNote()}</div>
         ${reachableBreakdownHtml(month, idx, cur)}
         ${changes("reachable")}
       </div>
       <div class="card stack">
-        <div class="label">My long-term total</div>
+        <div class="label">${viewMy()} long-term total</div>
         <div class="mid-number">${fmtMoney(t.longTerm, cur)}</div>
         ${changes("longTerm")}
       </div>` : `
@@ -2047,7 +2095,7 @@
 
     // A home is a yearly estimate: say which month its value comes from instead of "no change".
     const homeNote = (m) => {
-      const months = state.accounts.filter((a) => lower(a.type) === "home" && myShare(a) > 0)
+      const months = state.accounts.filter((a) => lower(a.type) === "home" && viewShare(a) > 0)
         .map((a) => { const b = Calc.balanceFor(a, m, idx); return b ? b.month : null; }).filter(Boolean).sort();
       return months.length ? `estimate from ${Calc.monthLabel(months[months.length - 1])} · yearly` : "yearly estimate";
     };
@@ -2076,13 +2124,13 @@
       </a>` : "";
 
     // Loans: remaining balance and monthly payment, plus the sum of payments across active loans.
-    const loans = state.accounts.filter((a) => lower(a.type) === "loan" && isActive(a) && myShare(a) > 0);
+    const loans = state.accounts.filter((a) => lower(a.type) === "loan" && isActive(a) && viewShare(a) > 0);
     let commitments = 0, commitmentsKnown = true;
     const loanRows = loans.map((a) => {
       const own = norm(a.currency).toUpperCase() || "ILS";
       const b = Calc.balanceFor(a, month, idx);
       const last = b ? { month, snap: b.snap } : Calc.latestSnapshot(idx, a.id);
-      const f = myShare(a);
+      const f = viewShare(a);
       const remaining = last ? Calc.parseAmount(last.snap.amount) * f : null;
       const p0 = loanPayment(a, Calc.currentMonth(), idx);
       const pay = p0 != null ? p0 * f : null;
@@ -2094,7 +2142,7 @@
       }
       return `
         <li>
-          <div><div>${accountName(a)}</div><div class="muted small">${remaining != null ? `owed ${last.month !== month ? `(${Calc.monthLabel(last.month)})` : ""}` : "no balance yet"}${f === 0.5 ? " · your 50%" : ""}${paidOff != null ? ` · ${paidOff.toFixed(0)}% paid off` : ""}</div></div>
+          <div><div>${accountName(a)}</div><div class="muted small">${remaining != null ? `owed ${last.month !== month ? `(${Calc.monthLabel(last.month)})` : ""}` : "no balance yet"}${f === 0.5 ? ` · ${esc(viewPoss())} 50%` : ""}${paidOff != null ? ` · ${paidOff.toFixed(0)}% paid off` : ""}</div></div>
           <div class="acct-right">
             <div class="mono neg">${remaining != null && isFinite(remaining) ? "−" + esc(fmtMoney(remaining, own)) : "—"}</div>
             <div class="acct-orig mono">${pay != null && isFinite(pay) ? `${esc(fmtMoney(pay, own))} / month` : "no payment set"}</div>
@@ -2104,11 +2152,11 @@
     // Other fixed payments (rent, parking…) in force this month, at your share.
     const nowM = Calc.currentMonth();
     let fixedSum = 0, incomeSum = 0;
-    const fixedAll = Calc.fixedForMonth(plainFixed(), nowM).filter((p) => myShare(p) > 0);
+    const fixedAll = Calc.fixedForMonth(plainFixed(), nowM).filter((p) => viewShare(p) > 0);
     const fixedNow = fixedAll.filter((p) => !p.income);
     const incomeNow = fixedAll.filter((p) => p.income);
     fixedAll.forEach((p) => {
-      const v = Calc.convert(p.amount * myShare(p), p.currency, cur, state.rates, nowM);
+      const v = Calc.convert(p.amount * viewShare(p), p.currency, cur, state.rates, nowM);
       if (v == null) commitmentsKnown = false; else if (p.income) incomeSum += v; else fixedSum += v;
     });
     const loansCard = loans.length || fixedAll.length ? `
@@ -2129,7 +2177,7 @@
         ${hero}
         ${missing}
         ${typeCards || cardsCard ? `<div><div class="group-title"><span class="label">Long-term view</span><span class="label">vs ${Calc.monthLabel(prevM)}</span></div>
-        <p class="muted small" style="margin:-4px 4px 10px">Bars show each part's share of everything you own (your share of joint items).</p><div class="type-grid">${typeCards}${cardsCard}</div></div>` : ""}
+        <p class="muted small" style="margin:-4px 4px 10px">Bars show each part's share of everything you own (${viewMode() === "both" ? "everything in full" : `${esc(viewPoss())} share of joint items`}).</p><div class="type-grid">${typeCards}${cardsCard}</div></div>` : ""}
         ${loansCard}
         ${goalsSection}
       </div>`;
