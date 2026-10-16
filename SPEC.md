@@ -202,6 +202,8 @@ Do not reintroduce the rejected options. If anything else in this spec seems to 
     - **Add/Edit account**: a one-line explanation under each type; "Name" and "Bank or company" (optional for a home); "Update on day" is optional (empty = from the 1st); "Update in month" for homes; the account ID moves behind "Account ID (set automatically)" and is made from the name. After adding an account, a panel offers to enter its first balance (or month total) now.
     - Accounts grouped by bank put accounts without one under "Other".
 
+31. **Banks follows the view** (requested after change 30). Banks shows only the accounts in the chosen view: in ME, your own and joint bank accounts; in the other person's view, theirs and joint; in BOTH, all. Every total, change and chart on the screen is at the view's share (joint 50% in a one-person view), and joint rows say "Joint · 50% counted". The to-do list holds only balances the person shown updates (in BOTH, everyone's, with "by …"). A due balance that someone else updates is not a to-do: it shows as "Waiting for <name>: <account> (due since …)" and as a "Waiting for <name>" chip. The "all accounts, full amounts" line is gone; BOTH shows that.
+
 ## How to work
 
 Build one stage at a time. After each stage: update SPEC.md, commit, merge to main, and give a plain-language test checklist. Wait for the go-ahead before the next stage.

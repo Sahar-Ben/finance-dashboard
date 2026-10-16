@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.10-2";
+  const APP_VERSION = "2026.10.16-1";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
@@ -717,50 +717,70 @@
       bindCurSeg();
       return;
     }
-    const map = {};
-    accts.forEach((a) => { const k = norm(a.institution) || "No institution"; (map[k] = map[k] || []).push(a); });
-    const names = Object.keys(map).sort((x, y) => x.localeCompare(y));
+    // The view decides everything on this screen: one person's own and joint accounts (counted at
+    // their share), or all accounts in full. A balance someone else updates is "waiting", not a to-do.
+    const shown = accts.filter((a) => viewShare(a) > 0);
+    if (!shown.length) {
+      $screen.innerHTML = `${head}
+        <div class="card empty stack"><p class="muted">No bank accounts in this view.</p></div>`;
+      bindCurSeg();
+      return;
+    }
+    const updaterOf = (a) => matchName(a.updater, personNames()) || "";
+    const isMyJob = (a) => viewMode() === "both" || !updaterOf(a) || updaterOf(a) === viewPerson().name;
+    const statuses = new Map(shown.map((a) => [a.id, updateStatus(a, idx, now)]));
+    const isDue = (a) => statuses.get(a.id).kind === "due";
+    const updated = shown.filter((a) => statuses.get(a.id).kind === "ok").length;
+    const todo = shown.filter((a) => isDue(a) && isMyJob(a));
+    const waiting = shown.filter((a) => isDue(a) && !isMyJob(a));
+    const waitingFor = [...new Set(waiting.map(updaterOf))];
     const yearMonths = Calc.monthRange(`${nowM.slice(0, 4)}-01`, nowM);
     const labels = yearMonths.map((m) => MONTHS[Number(m.slice(5)) - 1]);
     const fmtTick = fmtTickFor(cur);
 
-    const statuses = new Map(accts.map((a) => [a.id, updateStatus(a, idx, now)]));
-    const monthly = accts.filter((a) => statuses.get(a.id).kind !== "info" || lower(a.type) !== "home");
-    const updated = monthly.filter((a) => statuses.get(a.id).kind === "ok").length;
-    const dueCount = accts.filter((a) => statuses.get(a.id).kind === "due").length;
-    const allNet = groupNet(accts, idx);
-    let myNet = null;
-    accts.forEach((a) => {
-      const info = latestInfo(a, idx);
-      const f = viewShare(a);
-      if (!f || !info || info.converted == null) return;
-      myNet = (myNet || 0) + info.converted * f;
-    });
+    // Latest balances at the view's share, in the display currency.
+    const viewNet = (list) => {
+      let net = null;
+      list.forEach((a) => {
+        const info = latestInfo(a, idx);
+        if (!info || info.converted == null) return;
+        net = (net || 0) + info.converted * viewShare(a);
+      });
+      return net;
+    };
+    const statusChip = (list) => {
+      const mine = list.filter((a) => isDue(a) && isMyJob(a)).length;
+      const wait = [...new Set(list.filter((a) => isDue(a) && !isMyJob(a)).map(updaterOf))];
+      if (mine) return `<span class="chip warn">${mine} to update</span>`;
+      if (wait.length) return `<span class="chip">Waiting for ${esc(wait.join(" & "))}</span>`;
+      return list.every((a) => statuses.get(a.id).kind === "ok") ? `<span class="chip pos">All updated</span>` : `<span class="chip">Not due yet</span>`;
+    };
+
+    const map = {};
+    shown.forEach((a) => { const k = norm(a.institution) || "No bank"; (map[k] = map[k] || []).push(a); });
+    const names = Object.keys(map).sort((x, y) => x.localeCompare(y));
+    const myNet = viewNet(shown);
 
     const bankCards = names.map((name) => {
       const list = map[name].sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname)));
-      const net = groupNet(list, idx);
-      const T = yearMonths.map((m) => Calc.monthTotals(list, idx, m, cur, state.rates, latestBal));
+      const net = viewNet(list);
+      const T = yearMonths.map((m) => Calc.monthTotals(list, idx, m, cur, state.rates, latestBal, null, viewShare));
       const vals = T.map((t) => (t.hasBalances ? t.longTerm : null));
       const inc = T.map((t) => t.hasBalances && t.incomplete);
-      // Change = each account's latest balance against its own previous month, added up (loans negative).
+      // Change = each account's latest balance against its own previous month, at the view's share.
       let chgSum = 0, chgAny = false;
       list.forEach((a) => {
         const info = latestInfo(a, idx);
         if (!info || !info.delta) return;
         const v = Calc.convert(info.delta.amount, info.own, cur, state.rates, info.month);
         if (v == null) return;
-        chgSum += lower(a.type) === "loan" ? -v : v;
+        chgSum += v * viewShare(a);
         chgAny = true;
       });
-      const chg = chgAny ? Calc.change(net, net - chgSum) : null;
-      const due = list.filter((a) => statuses.get(a.id).kind === "due").length;
-      const ok = list.filter((a) => statuses.get(a.id).kind === "ok").length;
-      const chip = due ? `<span class="chip warn">${due} to update</span>`
-        : ok === list.length ? `<span class="chip pos">All updated</span>` : `<span class="chip">Not due yet</span>`;
+      const chg = chgAny && net != null ? Calc.change(net, net - chgSum) : null;
       return `
         <div class="card stack">
-          <div class="spread"><h3>${esc(name)}</h3>${chip}</div>
+          <div class="spread"><h3>${esc(name)}</h3>${statusChip(list)}</div>
           <div class="spread">
             <div class="mid-number nowrap">${net != null ? esc(fmtMoney(net, cur)) : "—"}</div>
             ${chg ? `<span class="mono small bank-chg ${toneOf(chg.amount)}">${fmtSigned(chg.amount, cur)} ${fmtPct(chg.pct)}<br><span class="muted">vs previous month</span></span>` : ""}
@@ -769,13 +789,13 @@
             ${list.map((a) => {
               const st = statuses.get(a.id);
               const info = latestInfo(a, idx);
-              const type = lower(a.type);
+              const half = viewShare(a) === 0.5;
               return `
                 <button class="bank-acct" data-acct="${esc(a.id)}">
                   <span class="status-dot ${st.kind}" aria-hidden="true"></span>
                   <span class="body"><span class="name">${accountName(a)}</span>
-                    <span class="muted small">${esc(TYPE_LABEL[type] || type)} · ${esc(st.text)}${st.kind === "ok" ? "" : ` · by ${esc(a.updater)}`}</span></span>
-                  <span class="mono small ${type === "loan" ? "neg" : ""}">${info && isFinite(info.amount) ? `${type === "loan" ? "−" : ""}${esc(fmtMoney(info.amount, info.own))}` : "—"}</span>
+                    <span class="muted small">${half ? "Joint · 50% counted · " : ""}${esc(st.text)}${st.kind === "ok" || isMyJob(a) && viewMode() !== "both" ? "" : ` · by ${esc(updaterOf(a) || a.updater)}`}</span></span>
+                  <span class="mono small">${info && isFinite(info.amount) ? esc(fmtMoney(info.amount, info.own)) : "—"}</span>
                 </button>`;
             }).join("")}
           </div>
@@ -785,27 +805,31 @@
         </div>`;
     }).join("");
 
+    const heroChip = todo.length ? `<span class="chip warn">${todo.length} to update</span>`
+      : waiting.length ? `<span class="chip">Waiting for ${esc(waitingFor.join(" & "))}</span>`
+      : updated === shown.length ? `<span class="chip pos">Up to date</span>` : `<span class="chip">Nothing due yet</span>`;
+    const whoTodo = viewMode() === "other" ? `${esc(viewPerson().name)} needs to update` : "Needs a balance";
     $screen.innerHTML = `${head}
       <div class="stack-lg">
         <div class="card hero stack">
-          <div class="label">${viewMode() === "both" ? "Our" : viewMode() === "other" ? `${esc(viewPerson().name)}'s` : "My"} bank accounts · latest balances</div>
+          <div class="label">${viewMy()} bank accounts · latest balances</div>
           <div class="big-number">${myNet != null ? esc(fmtMoney(myNet, cur)) : "—"}</div>
-          <div class="muted small">${viewNote()}${allNet != null && allNet !== myNet ? ` · all accounts, full amounts: <span class="mono">${esc(fmtMoney(allNet, cur))}</span>` : ""}</div>
-          <div class="spread small"><span>${updated} of ${monthly.length} updated for ${Calc.monthLabel(nowM, true)}</span>
-            ${dueCount ? `<span class="chip warn">${dueCount} to update</span>` : updated === monthly.length ? `<span class="chip pos">Up to date</span>` : `<span class="chip">Nothing due yet</span>`}</div>
-          <div class="bar"><span style="width:${monthly.length ? Math.max(updated ? 2 : 0, (updated / monthly.length) * 100).toFixed(1) : 0}%"></span></div>
-          ${dueCount ? `<div class="stack" style="gap:8px">
-            <div class="label">Needs a balance for ${Calc.monthLabel(nowM, true)}</div>
-            ${accts.filter((a) => statuses.get(a.id).kind === "due").map((a) => `
+          <div class="muted small">${viewNote()}</div>
+          <div class="spread small"><span>${updated} of ${shown.length} updated for ${Calc.monthLabel(nowM, true)}</span>${heroChip}</div>
+          <div class="bar"><span style="width:${Math.max(updated ? 2 : 0, (updated / shown.length) * 100).toFixed(1)}%"></span></div>
+          ${todo.length ? `<div class="stack" style="gap:8px">
+            <div class="label">${whoTodo} · ${Calc.monthLabel(nowM, true)}</div>
+            ${todo.map((a) => `
               <button class="due-item" data-update="${esc(a.id)}">
                 <span><span class="due-name">${accountName(a)}</span>
-                  <span class="muted small mono">${esc(statuses.get(a.id).text)} · by ${esc(a.updater || a.owner)}</span></span>
+                  <span class="muted small mono">${esc(statuses.get(a.id).text)}${viewMode() === "both" && updaterOf(a) ? ` · by ${esc(updaterOf(a))}` : ""}</span></span>
                 <span class="row"><span class="chip warn">Update</span><span class="chev">›</span></span>
               </button>`).join("")}
           </div>` : ""}
+          ${waiting.length ? `<p class="muted small">Waiting for ${esc(waitingFor.join(" & "))}: ${waiting.map((a) => `${accountName(a)} (${esc(statuses.get(a.id).text.replace(/^Due since/, "due since"))})`).join(", ")}.</p>` : ""}
         </div>
         ${bankCards}
-        <p class="muted small">Bank accounts only (savings, investments, pension, home and loans are on the Overview; cards on the Cards tab). Totals use each account's latest balance, converted with that month's rate. Green = updated this month, orange = due, grey = not due yet.</p>
+        <p class="muted small">Bank accounts only (savings, investments, pension, home and loans are on the Overview; cards on Spending). Totals use each account's latest balance, converted with that month's rate${viewMode() === "both" ? "" : "; joint accounts count 50%"}. Green = updated this month, orange = due, grey = not due yet.</p>
       </div>`;
     Charts.bind($screen);
     bindCurSeg();
