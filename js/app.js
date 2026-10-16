@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.16-1";
+  const APP_VERSION = "2026.10.16-2";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
@@ -892,31 +892,44 @@
     const r = x.row;
     if (x.cat === "own_transfer") {
       const f = acctById(r.from_account), t = acctById(r.to_account);
-      return `${f ? accountName(f) : "?"} → ${t ? accountName(t) : "?"}`;
+      const by = state.me && lower(r.owner) !== lower(state.me.name) && norm(r.owner) ? ` · by ${esc(r.owner)}` : "";
+      return `${f ? accountName(f) : "?"} → ${t ? accountName(t) : "?"}${by}`;
     }
     const c = r.card_id ? acctById(r.card_id) : null;
-    return `${esc(explLabel(x.cat))}${c ? ` · ${accountName(c)}` : ""}${norm(r.note) ? ` · ${esc(r.note)}` : ""}`;
+    const acct = explAccount(r) ? acctById(explAccount(r)) : null;
+    const by = state.me && lower(r.owner) !== lower(state.me.name) && norm(r.owner) ? ` · by ${esc(r.owner)}` : "";
+    return `${esc(explLabel(x.cat))}${acct ? ` · ${accountName(acct)}` : ""}${c ? ` · ${accountName(c)}` : ""}${norm(r.note) ? ` · ${esc(r.note)}` : ""}${by}`;
   }
 
-  // Explanations for a month by `owners` (default: the signed-in person), in the display currency:
-  // [{ row, cat, amount (signed), gross }]. With `share`, an own transfer's effect is recomputed for that
-  // view: moved × (share of To − share of From), so in the both view a move between household accounts is 0.
+  // The account an explanation belongs to (money out of from_account, or into to_account); null when
+  // it was given for the month's total. Own transfers have both.
+  const explAccount = (r) => norm(r.from_account) || norm(r.to_account) || null;
+
+  // Explanations for a month, in the display currency: [{ row, cat, amount (signed effect), gross }].
+  // Without `share`: the given people's rows (default: the signed-in person) with their stored amounts.
+  // With `share` (a view): the given people's rows for the month's total, plus every row tied to an
+  // account, whoever entered it, because a gap in an account is a fact about that account. A row tied to
+  // an account counts at the view's share of it: moved × (share of To − share of From) for an own
+  // transfer, ± gross × share of the account otherwise (so in the both view a household move is 0).
   function explainedFor(month, cur, owners, share) {
     const who = (owners || [state.me.name]).map(lower);
-    return (state.explained || []).filter((r) => Calc.normMonth(r.month) === month && who.includes(lower(r.owner)) && EXPL_CATS[lower(r.category)])
+    return (state.explained || []).filter((r) => Calc.normMonth(r.month) === month && EXPL_CATS[lower(r.category)]
+      && (who.includes(lower(r.owner)) || (share && explAccount(r) && norm(r.gross) !== "")))
       .map((r) => {
         const c = norm(r.currency).toUpperCase() || "ILS";
         const conv = (v) => (isFinite(v) ? Calc.convert(v, c, cur, state.rates, month) : null);
         const cat = lower(r.category);
         const gross = conv(Calc.parseAmount(r.gross));
         let amount = conv(Calc.parseAmount(r.amount));
-        if (share && cat === "own_transfer" && gross != null) {
-          const f = state.accounts.find((a) => a.id === norm(r.from_account));
-          const t = state.accounts.find((a) => a.id === norm(r.to_account));
-          if (f && t) amount = gross * (share(t) - share(f));
+        if (share && gross != null) {
+          const f = acctById(r.from_account);
+          const t = acctById(r.to_account);
+          if (cat === "own_transfer") { if (f && t) amount = gross * (share(t) - share(f)); }
+          else if (t) amount = gross * share(t);
+          else if (f) amount = -gross * share(f);
         }
         return { row: r, cat, amount, gross };
-      }).filter((x) => x.amount != null);
+      }).filter((x) => x.amount != null && (who.includes(lower(x.row.owner)) || Math.abs(x.amount) >= 0.005));
   }
   const explSum = (list, affects) => list.filter((x) => EXPL_CATS[x.cat].affects === affects).reduce((t, x) => t + x.amount, 0);
 
@@ -924,25 +937,43 @@
     state.explained = (await Sheets.readTab("Explained")).rows;
   }
 
-  function openExplain(month, unexplained) {
+  // Explains the month's unexplained money: the whole total, or (with ctx = { account, gap, gaps })
+  // one account's gap, saved against that account so its gap closes. Gaps are full amounts; a joint
+  // account's explanation counts at each person's share.
+  function openExplain(month, unexplained, ctx) {
     const cur = state.displayCur;
-    const list = explainedFor(month, cur);
+    const acct = ctx && ctx.account ? ctx.account : null;
+    const gap = acct ? ctx.gap : unexplained;
+    const touches = (x) => [norm(x.row.from_account), norm(x.row.to_account)].includes(acct.id);
+    const list = acct ? explainedFor(month, cur, [state.me.name], myShare).filter(touches) : explainedFor(month, cur);
     const prevM = Calc.shiftMonth(month, -1);
-    const prevList = explainedFor(prevM, cur);
-    const dirDefault = unexplained >= 0 ? "in" : "out";
-    // Accounts that hold money and count for me (own or joint), for transfers; my cards for refunds.
-    const moneyAccts = state.accounts.filter((a) => isActive(a) && ["current", "savings", "investment"].includes(lower(a.type)) && myShare(a) > 0)
-      .sort((x, y) => norm(x.nickname).localeCompare(norm(y.nickname)));
+    const prevList = acct ? [] : explainedFor(prevM, cur);
+    const dirDefault = gap >= 0 ? "in" : "out";
+    // Accounts that hold money, for transfers (yours and joint first); my cards for refunds.
+    const moneyAccts = state.accounts.filter((a) => isActive(a) && ["current", "savings", "investment"].includes(lower(a.type)))
+      .sort((x, y) => (myShare(y) > 0) - (myShare(x) > 0) || norm(x.nickname).localeCompare(norm(y.nickname)));
     const myCards = state.accounts.filter((a) => isActive(a) && lower(a.type) === "card" && myShare(a) > 0);
-    const acctOpts = (sel) => moneyAccts.map((a) => `<option value="${esc(a.id)}" ${a.id === sel ? "selected" : ""}>${esc(norm(a.nickname) || a.id)}${myShare(a) === 0.5 ? " (joint)" : ""}</option>`).join("");
+    const suffix = (a) => (myShare(a) === 0.5 ? " (joint)" : myShare(a) === 0 ? ` (${norm(a.owner) || "other"})` : "");
+    const acctOpts = (sel) => moneyAccts.map((a) => `<option value="${esc(a.id)}" ${a.id === sel ? "selected" : ""}>${esc(norm(a.nickname) || a.id)}${esc(suffix(a))}</option>`).join("");
+    // For a transfer, this account is one end; the other end is the account with the closest opposite gap.
+    let fromSel = moneyAccts[0] && moneyAccts[0].id, toSel = moneyAccts[1] && moneyAccts[1].id;
+    if (acct) {
+      const opp = ctx.gaps ? [...ctx.gaps.values()].filter((r) => r.a.id !== acct.id && Math.abs(r.diff) >= 1 && Math.sign(r.diff) !== Math.sign(gap))
+        .sort((x, y) => Math.abs(Math.abs(x.diff) - Math.abs(gap)) - Math.abs(Math.abs(y.diff) - Math.abs(gap)))[0] : null;
+      const other = (opp && opp.a.id) || (moneyAccts.find((a) => a.id !== acct.id) || {}).id;
+      if (gap < 0) { fromSel = acct.id; toSel = other; } else { fromSel = other; toSel = acct.id; }
+    }
+    const joint = acct && myShare(acct) === 0.5;
     openSheet(`
       <form id="ex-form" class="stack-lg" novalidate>
-        <div class="spread"><div><div class="label">Explain · ${esc(Calc.monthLabel(month, true))}</div>
-          <h2>${Math.abs(unexplained) < 1 ? "Everything explained" : `${unexplained >= 0 ? "Money came in" : "Money went out"}: ${esc(fmtMoney(Math.abs(unexplained), cur))}`}</h2></div>
+        <div class="spread"><div><div class="label">Explain · ${acct ? `${accountName(acct)} · ` : ""}${esc(Calc.monthLabel(month, true))}</div>
+          <h2>${acct ? (Math.abs(gap) < 1 ? "This account matches ✓" : `${esc(fmtMoney(Math.abs(gap), cur))} more ${gap >= 0 ? "came in" : "went out"} than expected`)
+            : Math.abs(unexplained) < 1 ? "Everything explained" : `${unexplained >= 0 ? "Money came in" : "Money went out"}: ${esc(fmtMoney(Math.abs(unexplained), cur))}`}</h2></div>
           <button type="button" class="icon-btn" data-close aria-label="Close">✕</button></div>
-        <p class="muted">Worked out from your balances. Tell the app what it was; split it into as many parts as you like.</p>
+        <p class="muted">${acct ? `Tell the app what it was. If it was more than one thing, save each part; the rest stays open.${joint ? " This is a joint account: your totals count 50% of it." : ""}`
+          : "Worked out from your balances. Tell the app what it was; split it into as many parts as you like."}</p>
         ${list.length ? `<ul class="plain-list">${list.map((x) => `
-          <li><span>${explText(x)}${x.cat === "own_transfer" && x.gross != null ? ` <span class="muted small">moved ${esc(fmtMoney(x.gross, cur))}</span>` : ""}</span>
+          <li><span>${explText(x)}${x.gross != null && (x.cat === "own_transfer" || Math.abs(Math.abs(x.amount) - x.gross) >= 0.5) ? ` <span class="muted small">${x.cat === "own_transfer" ? "moved" : "full"} ${esc(fmtMoney(x.gross, cur))}</span>` : ""}</span>
             <span class="row"><span class="mono ${x.amount > 0 ? "pos" : x.amount < 0 ? "neg" : "muted"}">${esc(fmtSigned(x.amount, cur))}</span>
             <button type="button" class="btn small danger" data-ex-del="${esc(x.row.id)}">Delete</button></span></li>`).join("")}</ul>` : ""}
         ${!list.length && prevList.length ? `<button type="button" class="btn block" id="ex-copy">Copy ${Calc.monthLabel(prevM)}'s ${prevList.length} explanation${prevList.length > 1 ? "s" : ""}</button>` : ""}
@@ -952,8 +983,8 @@
               <span class="choice-title">${esc(EXPL_CATS[k].label)}</span><span class="muted small">${esc(EXPL_CATS[k].hint)}</span>
             </button>`).join("")}</div></div>
         <div class="field-row" id="ex-route">
-          <div class="field"><label class="label" for="ex-from">From</label><select id="ex-from">${acctOpts(moneyAccts[0] && moneyAccts[0].id)}</select></div>
-          <div class="field"><label class="label" for="ex-to">To</label><select id="ex-to">${acctOpts(moneyAccts[1] && moneyAccts[1].id)}</select></div>
+          <div class="field"><label class="label" for="ex-from">From</label><select id="ex-from">${acctOpts(fromSel)}</select></div>
+          <div class="field"><label class="label" for="ex-to">To</label><select id="ex-to">${acctOpts(toSel)}</select></div>
         </div>
         <div class="field" id="ex-card-field"><label class="label" for="ex-card">Paid on which card (optional)</label>
           <select id="ex-card">${options(myCards.map((a) => [a.id, norm(a.nickname) || a.id]), "", "Not set")}</select></div>
@@ -964,7 +995,7 @@
           </div></div>
         <div class="field-row">
           <div class="field"><label class="label" for="ex-amount" id="ex-amount-label">Amount (${esc(cur)})</label>
-            <input id="ex-amount" type="text" inputmode="decimal" value="${Math.abs(unexplained) >= 1 ? Math.round(Math.abs(unexplained)) : ""}"></div>
+            <input id="ex-amount" type="text" inputmode="decimal" value="${Math.abs(gap) >= 1 ? Math.round(Math.abs(gap)) : ""}"></div>
           <div class="field"><label class="label" for="ex-note">Note</label><input id="ex-note" autocomplete="off" placeholder="Optional"></div>
         </div>
         <p class="muted small" id="ex-effect"></p>
@@ -987,13 +1018,16 @@
       const x = Calc.parseAmount($amt.value);
       document.getElementById("ex-effect").textContent = k === "own_transfer" && isFinite(x)
         ? (Math.abs(transferEffect(x)) < 0.5 ? "Both accounts count fully for you, so this changes nothing in your totals; it just explains the move."
-          : `Your share changes by ${fmtSigned(transferEffect(x), cur)} (a joint account counts 50% for you).`) : "";
+          : `Your share changes by ${fmtSigned(transferEffect(x), cur)} (a joint account counts 50% for you).`)
+        : joint && isFinite(x) && x > 0 ? `Counts ${fmtMoney(x / 2, cur)} (50%) in your totals.` : "";
     };
     const markCat = () => document.querySelectorAll("#ex-cat .choice").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.cat === $cat.value)));
     document.getElementById("ex-cat").addEventListener("click", (e) => {
       const b = e.target.closest("[data-cat]");
       if (!b) return;
       $cat.value = b.dataset.cat;
+      // A two-way choice starts in the direction of the gap.
+      if (EXPL_CATS[$cat.value].dir === "both") document.querySelectorAll("#ex-dir button").forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.dir === dirDefault)));
       markCat();
       sync();
       // Bring the fields for this choice into view.
@@ -1009,9 +1043,22 @@
       if (b) document.querySelectorAll("#ex-dir button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
     });
     // Redraw Savings, then reopen this panel with the new remaining amount until it is all explained.
+    // For one account: reopen on that account until its gap is closed.
     const done = (msg) => {
       closeSheet();
       route();
+      if (acct) {
+        const r = state.lastGaps && state.lastGaps.rows.get(acct.id);
+        if (r && Math.abs(r.diff) >= 1) {
+          toast(`${msg} · ${fmtMoney(Math.abs(r.diff), cur)} of this gap left`);
+          openExplain(month, state.lastUnexplained, { account: r.a, gap: r.diff, gaps: state.lastGaps.rows });
+        } else {
+          toast(`${msg} · ${norm(acct.nickname) || acct.id} explained ✓`);
+          const list = document.querySelector(".gap-list");
+          if (list) list.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+        return;
+      }
       const left = state.lastUnexplained;
       const again = document.getElementById("sv-explain");
       if (again && left != null && Math.abs(left) >= 1) {
@@ -1065,6 +1112,9 @@
       } else {
         const dir = document.querySelector('#ex-dir [aria-pressed="true"]').dataset.dir;
         row = { category: k, amount: dir === "out" ? -x : x, card_id: k === "refund" ? document.getElementById("ex-card").value : "" };
+        // Tied to the account: the full amount (gross) leaves or enters it; the effect counts at my share.
+        if (acct) Object.assign(row, { gross: x, amount: (dir === "out" ? -x : x) * myShare(acct),
+          from_account: dir === "out" ? acct.id : "", to_account: dir === "in" ? acct.id : "" });
       }
       const btn = e.target.querySelector('[type="submit"]');
       setBusy(btn, true, "Saving…");
@@ -1324,6 +1374,7 @@
     // Unexplained = total saved − saved from income (already including explained income/refunds/spending) − neutral explanations.
     const otherM = cashM != null && savedM != null ? cashM - loanM.sum - savedM - explNeutralM : null;
     state.lastUnexplained = otherM; // read by the Explain panel after a save
+    state.lastGaps = null; // set by gapsHtml when the per-account gaps are drawn
     // Total saved from all sources, worked out from balances alone (extra income, friends paying back included).
     const totalSavedM = cashM != null ? cashM - loanM.sum : null;
     const totalSeries = yearMonths.map((m) => { const c = cashChange(m); return c == null ? null : c - newLoanMoney(m).sum; });
@@ -1365,9 +1416,13 @@
           if (up > 0) add(norm(a.linked_account), `${norm(a.nickname) || a.id} (new loan money)`, conv(up, own(a, now)));
         }
       });
-      explainedFor(m, cur, viewOwners(), viewShare).filter((x) => x.cat === "own_transfer" && x.gross != null).forEach((x) => {
-        add(norm(x.row.from_account), `Transfer out (explained)`, -x.gross);
-        add(norm(x.row.to_account), `Transfer in (explained)`, x.gross);
+      // Explained money tied to an account counts in that account's expected change (full amounts).
+      const explFlows = new Map(accts.map((a) => [a.id, []]));
+      explainedFor(m, cur, viewOwners(), viewShare).filter((x) => x.gross != null && explAccount(x.row)).forEach((x) => {
+        const label = x.cat === "own_transfer" ? null : explLabel(x.cat);
+        const f = norm(x.row.from_account), t = norm(x.row.to_account);
+        if (f && flows.has(f)) { flows.get(f).push({ name: label ? `${label} (explained)` : "Transfer out (explained)", v: -x.gross }); explFlows.get(f).push(x); }
+        if (t && flows.has(t)) { flows.get(t).push({ name: label ? `${label} (explained)` : "Transfer in (explained)", v: x.gross }); explFlows.get(t).push(x); }
       });
       const rows = accts.map((a) => {
         const sNow = idx.get(norm(a.id), m), sPrev = idx.get(norm(a.id), pm);
@@ -1375,25 +1430,67 @@
         const actual = conv(Calc.parseAmount(sNow.amount), own(a, sNow)) - conv(Calc.parseAmount(sPrev.amount), own(a, sPrev));
         const items = flows.get(a.id);
         const expected = items.reduce((t, x) => t + x.v, 0);
-        return { a, actual, expected, items, diff: actual - expected };
+        return { a, actual, expected, items, diff: actual - expected, explained: explFlows.get(a.id) };
       });
       return { rows, unlinked };
     }
-    const breakdownHtml = (m) => {
+    // An account down by about what another is up: most likely a transfer between them.
+    function transferPairs(rows) {
+      const neg = rows.filter((r) => !r.missing && r.diff <= -1).sort((x, y) => x.diff - y.diff);
+      const pos = rows.filter((r) => !r.missing && r.diff >= 1);
+      const used = new Set();
+      const pairs = [];
+      neg.forEach((n) => {
+        const amt = -n.diff;
+        const match = pos.filter((p) => !used.has(p.a.id) && Math.abs(p.diff - amt) <= Math.max(1, amt * 0.005))
+          .sort((x, y) => Math.abs(x.diff - amt) - Math.abs(y.diff - amt))[0];
+        if (!match) return;
+        used.add(match.a.id);
+        pairs.push({ from: n.a, to: match.a, amount: Math.round(Math.min(amt, match.diff) * 100) / 100 });
+      });
+      return pairs;
+    }
+    // Where the gap is, account by account: each gap can be explained on its own.
+    let gapInfo = null;
+    const gapsHtml = (m) => {
       const b = accountBreakdown(m);
       const amt = (v) => `<span class="nowrap">${esc(fmtSigned(v, cur))}</span>`;
       const line = (x) => `${esc(x.name)} ${amt(x.v)}`;
+      const gaps = b.rows.filter((r) => !r.missing && Math.abs(r.diff) >= 1).sort((x, y) => Math.abs(y.diff) - Math.abs(x.diff));
+      const fine = b.rows.filter((r) => !r.missing && Math.abs(r.diff) < 1);
+      const missing = b.rows.filter((r) => r.missing);
+      const pairs = transferPairs(gaps);
+      gapInfo = { rows: new Map(b.rows.filter((r) => !r.missing).map((r) => [r.a.id, r])), pairs };
+      state.lastGaps = gapInfo;
+      const canExplain = viewMode() === "me";
+      const isJoint = (a) => (ownerOf(a) || JOINT) === JOINT;
       return `
-        <details class="calc">
-          <summary class="link-btn">Why? Show it per account</summary>
-          <p class="muted small" style="margin:6px 0">Each account's real change against what you entered for it (full amounts, not the 50% share of joint ones). The difference is where the unexplained money is.</p>
-          <ul class="plain-list loan-list">${b.rows.map((r) => r.missing ? `<li><span>${accountName(r.a)}</span><span class="small warn-text">balance missing</span></li>` : `
-            <li><div><div>${accountName(r.a)}${(ownerOf(r.a) || JOINT) === JOINT ? ` <span class="muted small">(joint)</span>` : ""}</div>
-              <div class="muted small">changed ${amt(r.actual)} · expected ${amt(r.expected)}${r.items.length ? ` (${r.items.map(line).join(", ")})` : " (nothing linked)"}</div></div>
-              <div class="acct-right"><div class="mono ${Math.abs(r.diff) < 1 ? "muted" : r.diff > 0 ? "pos" : "neg"}">${Math.abs(r.diff) < 1 ? "✓" : esc(fmtSigned(r.diff, cur))}</div>
-              <div class="acct-orig">${Math.abs(r.diff) < 1 ? "matches" : "unexplained"}</div></div></li>`).join("")}</ul>
+        <div class="stack gap-list">
+          <div class="label" style="margin-top:6px">Where the gap is · per account</div>
+          <p class="muted small">Each account's real change against what the app expected from what you entered (full amounts).${viewMode() === "both" ? "" : " Joint accounts count 50% in your totals."} Explain each gap on its own.</p>
+          ${canExplain ? pairs.map((p, i) => `
+            <div class="suggest">
+              <div><div class="due-name">Looks like a transfer</div>
+                <div class="muted small">${esc(fmtMoney(p.amount, cur))} from ${accountName(p.from)} to ${accountName(p.to)}</div></div>
+              <button type="button" class="btn small primary" data-pair="${i}">Yes, a transfer</button>
+            </div>`).join("") : ""}
+          ${gaps.map((r) => `
+            <div class="gap-row">
+              <div class="spread" style="align-items:flex-start">
+                <div><div class="due-name">${accountName(r.a)}${isJoint(r.a) && viewMode() !== "both" ? ` <span class="muted small">(joint)</span>` : ""}</div>
+                  <div class="muted small">changed ${amt(r.actual)} · expected ${amt(r.expected)}${r.items.length ? ` (${r.items.map(line).join(", ")})` : ""}</div></div>
+                <div class="acct-right"><div class="mono ${r.diff > 0 ? "pos" : "neg"}">${esc(fmtSigned(r.diff, cur))}</div>
+                  <div class="acct-orig">${r.diff > 0 ? "more came in" : "more went out"}</div></div>
+              </div>
+              ${canExplain ? `<button type="button" class="btn small block" data-gap="${esc(r.a.id)}">Explain this gap</button>` : ""}
+            </div>`).join("")}
+          ${!gaps.length ? `<p class="muted small">Every account matches what you entered. The rest of the gap comes from payments not linked to an account (below), or explain the total.</p>` : ""}
+          ${fine.length ? `<details class="calc"><summary class="link-btn">${fine.length} account${fine.length === 1 ? " matches" : "s match"} ✓</summary>
+            <ul class="plain-list loan-list" style="margin-top:6px">${fine.map((r) => `<li><div><div>${accountName(r.a)}</div>
+              <div class="muted small">changed ${amt(r.actual)} · expected ${amt(r.expected)}</div></div><span class="mono muted">✓</span></li>`).join("")}</ul></details>` : ""}
+          ${missing.length ? `<p class="muted small warn-text">Balance missing for this or last month: ${missing.map((r) => accountName(r.a)).join(", ")}.</p>` : ""}
           ${b.unlinked.length ? `<p class="muted small">Not linked to any account yet: ${b.unlinked.map(line).join(", ")}. Set "Paid from" / "Paid into" (Accounts → Edit account, or the fixed payment's bank account) to see where they belong.</p>` : ""}
-        </details>`;
+        </div>`;
     };
     const savingsHtml = !salaries.length ? `
       <div class="card stack">
@@ -1439,8 +1536,8 @@
         </ul>
         ${otherM != null ? `<div class="spread commit"><span>${Math.abs(otherM) < 1 ? "Everything explained" : otherM >= 0 ? "Unexplained money in" : "Unexplained money out"}</span><span class="mono ${Math.abs(otherM) < 1 ? "muted" : otherM >= 0 ? "pos" : "neg"}">${Math.abs(otherM) < 1 ? "✓" : `${otherM >= 0 ? "+" : "−"}${esc(fmtMoney(Math.abs(otherM), cur))}`}</span></div>
         ${Math.abs(otherM) >= 1 ? `<div class="muted small">${otherM >= 0 ? "e.g. extra income, friends paying you back, transfers in, investment gains." : "e.g. cash, Bit, transfers out, investment losses."} Tell the app what it was to make your savings exact.</div>` : ""}
-        ${Math.abs(otherM) >= 1 ? breakdownHtml(month) : ""}
-        ${viewMode() === "me" ? `<button type="button" class="btn block" id="sv-explain">${explM.length ? "Explain / edit" : "Explain this"}</button>`
+        ${Math.abs(otherM) >= 1 ? gapsHtml(month) : ""}
+        ${viewMode() === "me" ? `<button type="button" class="btn ${Math.abs(otherM) >= 1 ? "ghost " : ""}block" id="sv-explain">${Math.abs(otherM) >= 1 ? "Explain the total instead" : explM.length ? "See or remove explanations" : "Explain this"}</button>`
           : `<div class="muted small">Switch to ME to add your explanations.</div>`}` : ""}`}
       </div>`;
     const SPEND_COLORS = { cards: Charts.TYPE_COLORS.current, fixed: Charts.TYPE_COLORS.savings };
@@ -1539,6 +1636,33 @@
     $screen.querySelectorAll("[data-fx-month]").forEach((li) => li.addEventListener("click", () => openMonthOverride(li.dataset.fxMonth, month)));
     const exBtn = document.getElementById("sv-explain");
     if (exBtn) exBtn.addEventListener("click", () => openExplain(month, otherM));
+    // Per gap: explain one account's gap, or confirm a detected transfer in one tap.
+    $screen.querySelectorAll("[data-gap]").forEach((b) => b.addEventListener("click", () => {
+      const r = gapInfo && gapInfo.rows.get(b.dataset.gap);
+      if (r) openExplain(month, otherM, { account: r.a, gap: r.diff, gaps: gapInfo.rows });
+    }));
+    $screen.querySelectorAll("[data-pair]").forEach((b) => b.addEventListener("click", async () => {
+      const p = gapInfo && gapInfo.pairs[Number(b.dataset.pair)];
+      if (!p) return;
+      setBusy(b, true, "Saving…");
+      try {
+        await guarded(async () => {
+          await Sheets.appendRows("Explained", [{
+            id: `x-${Date.now().toString(36)}`, month, owner: state.me.name, category: "own_transfer", currency: cur,
+            gross: p.amount, amount: Math.round(p.amount * (myShare(p.to) - myShare(p.from)) * 100) / 100,
+            from_account: p.from.id, to_account: p.to.id, note: "", entered_by: state.me.name, entered_at: new Date().toISOString(),
+          }]);
+          await loadExplained();
+        });
+        const y = window.scrollY;
+        renderCards();
+        window.scrollTo(0, y);
+        toast(`Transfer saved: ${norm(p.from.nickname) || p.from.id} → ${norm(p.to.nickname) || p.to.id}`);
+      } catch (e) {
+        toast(friendlyError(e), true);
+        setBusy(b, false);
+      }
+    }));
     document.getElementById("sp-tab").addEventListener("click", (e) => {
       const b = e.target.closest("[data-sptab]");
       if (!b || b.dataset.sptab === spTab) return;

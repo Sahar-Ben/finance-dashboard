@@ -444,3 +444,9 @@ button.hist-row:active, button.due-item:active { border-color: var(--accent); }
   background: #0D0B16; border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; min-height: 44px; }
 .choice-title { font-weight: 600; }
 .choice[aria-checked="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; background: rgba(157, 107, 255, 0.10); }
+
+/* Savings: per-account gaps */
+.gap-row { display: flex; flex-direction: column; gap: 10px; background: #0D0B16; border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; }
+.gap-row .acct-right { text-align: right; flex: none; }
+.suggest { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--accent); border-radius: 14px; padding: 12px 14px; background: rgba(157, 107, 255, 0.10); }
+.suggest .btn { flex: none; }
