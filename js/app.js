@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.23-2";
+  const APP_VERSION = "2026.10.23-3";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
@@ -2994,9 +2994,11 @@
     state.snapshots.forEach((sn) => {
       const a = byId.get(lower(sn.account_id));
       const m = Calc.normMonth(sn.month);
-      const d = Calc.normDate(sn.as_of_date);
+      const d = Calc.normDate(sn.as_of_date) || Calc.normDate(norm(sn.entered_at).slice(0, 10));
       if (!a || lower(a.type) === "home" || !m || !d || m < from || d.slice(0, 7) !== m) return;
-      const day = Number(norm(a.update_day)) || defaultUpdateDay() || 1;
+      // The later of the account's own day and the household's update day, so entries made on an
+      // account's old update day still count as early before "Set all accounts" is used.
+      const day = Math.max(Number(norm(a.update_day)) || 1, defaultUpdateDay() || 20);
       if (Number(d.slice(8)) >= day) return;
       const to = Calc.shiftMonth(m, -1);
       out.push({ snap: sn, account: a, month: m, to, clash: !!idx.get(norm(a.id), to) });
