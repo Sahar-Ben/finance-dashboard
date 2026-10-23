@@ -185,11 +185,10 @@
   // An active non-card account is expected from its first snapshot onward (or, if it has none yet,
   // from the latest month with balances); a missing expected balance marks the month incomplete.
   // `shareOf(account)` (optional) weights each account, e.g. 0.5 for joint; accounts weighted 0 are ignored.
-  // In the current month, an account whose update day hasn't come yet is not missing: its latest
-  // earlier balance is carried forward and it is listed in `notDue` instead.
+  // A month is entered on the update day of the next month. Until then an account's balance for it is
+  // not missing: its latest earlier balance is carried forward and it is listed in `notDue` instead.
   function monthTotals(accounts, idx, month, display, rates, latestBalanceMonth, rateMonth, shareOf, now) {
     now = now || new Date();
-    const nowM = currentMonth(now);
     const notDue = [];
     const byType = {};
     TYPES.forEach((t) => { byType[t] = 0; });
@@ -207,7 +206,7 @@
       const share = shareOf ? shareOf(a) : 1;
       if (!share) return;
       let b = balanceFor(a, month, idx);
-      if (!b && month === nowM && !FLOW_TYPES.includes(type) && isActive(a) && notDueYet(a, now)) {
+      if (!b && !FLOW_TYPES.includes(type) && isActive(a) && notDueYet(a, month, now)) {
         const prev = (idx.byAccount.get(norm(a.id)) || []).filter((x) => x.month < month);
         const last = prev[prev.length - 1];
         notDue.push({ account: a, from: last ? last.month : null });
@@ -266,17 +265,30 @@
 
   const clampDay = (d, month) => Math.min(Math.max(1, Number(d) || 1), Number(lastDayOfMonth(month).slice(8)));
 
-  // True when a monthly account's update day for the current month is still ahead.
-  function notDueYet(a, now) {
+  // The latest month a monthly account is due for. Each month is entered on the update day of the
+  // next month (from the 1st when there is no update day), so on the 20th of November it is October.
+  function lastDueMonth(a, now) {
+    now = now || new Date();
+    const nowM = currentMonth(now);
+    return shiftMonth(nowM, now.getDate() >= clampDay(a.update_day, nowM) ? -1 : -2);
+  }
+
+  // The month normally being entered now: last month (it is entered during this month).
+  const entryMonth = (now) => shiftMonth(currentMonth(now), -1);
+  // Default as-of date for a balance of `month`: today while it is being entered, else the month's last day.
+  const defaultAsOf = (month, now) => (month >= entryMonth(now) ? today(now) : lastDayOfMonth(month));
+
+  // True when a monthly account's balance for `month` is not due yet.
+  function notDueYet(a, month, now) {
     if (lower(a.type) === "home") return false;
-    return now.getDate() < clampDay(a.update_day, currentMonth(now));
+    return month > lastDueMonth(a, now);
   }
 
   // ---------- due list ----------
 
   // Accounts the person updates whose due date has passed with no snapshot yet.
-  // Monthly accounts: due this month once update_day has passed; earlier months of this year (or since
-  // the first snapshot, if older) that are still empty are overdue. Home: due once a year from update_month/update_day.
+  // Monthly accounts: the previous month is due once this month's update_day has passed; earlier months
+  // of that year (or since the first snapshot, if older) that are still empty are overdue. Home: due once a year from update_month/update_day.
   // No update day means due from the 1st; a home with no update month is due when this year has no value.
   // Accounts with no updater go to whoever `noUpdater(account)` accepts (optional).
   function dueList(accounts, idx, personName, now, noUpdater) {
@@ -301,17 +313,15 @@
       }
       // Earlier months are checked from January of this year (or the first snapshot, if older);
       // a loan only from its start month.
+      const dueM = lastDueMonth(a, now);
       const first = idx.firstMonth.get(id);
-      let from = `${nowM.slice(0, 4)}-01`;
+      let from = `${dueM.slice(0, 4)}-01`;
       if (first && first < from) from = first;
       const loanStart = type === "loan" ? normMonth(a.loan_start) : null;
       if (loanStart && loanStart > from) from = loanStart;
-      {
-        for (let m = from; m < nowM; m = shiftMonth(m, 1)) {
-          if (!idx.get(id, m)) out.push({ account: a, month: m, overdue: true });
-        }
+      for (let m = from; m <= dueM; m = shiftMonth(m, 1)) {
+        if (!idx.get(id, m)) out.push({ account: a, month: m, overdue: m < dueM });
       }
-      if (day >= clampDay(a.update_day, nowM) && !idx.get(id, nowM)) out.push({ account: a, month: nowM, overdue: false });
     });
     return out.sort((x, y) => (x.overdue === y.overdue ? x.month.localeCompare(y.month) : x.overdue ? -1 : 1));
   }
@@ -463,9 +473,9 @@
         asOf = normDate(r.as_of_date);
         if (!asOf) problems.push({ col: "as_of_date", msg: `Bad date "${norm(r.as_of_date)}". Use YYYY-MM-DD.` });
         else if (asOf > todayStr) problems.push({ col: "as_of_date", msg: "The as-of date is in the future." });
-        else if (month && !FLOW_TYPES.includes(type) && asOf.slice(0, 7) !== month) warnings.push(`As-of date ${asOf} is outside ${monthLabel(month, true)}.`);
+        else if (month && !FLOW_TYPES.includes(type) && asOf.slice(0, 7) !== month && asOf.slice(0, 7) !== shiftMonth(month, 1)) warnings.push(`As-of date ${asOf} is outside ${monthLabel(month, true)}.`);
       } else if (month) {
-        asOf = month === nowMonth ? todayStr : (month < nowMonth ? lastDayOfMonth(month) : todayStr);
+        asOf = month < shiftMonth(nowMonth, -1) ? lastDayOfMonth(month) : todayStr;
         warnings.push(`No as-of date; ${asOf} will be used.`);
       }
 
@@ -507,7 +517,7 @@
     TYPES, ASSET_TYPES, FLOW_TYPES, CURRENCIES, MONTH_NAMES, LARGE_CHANGE_RATIO, TRIVIAL_ILS,
     currentMonth, today, isMonth, normMonth, shiftMonth, monthLabel, lastDayOfMonth, normDate, parseAmount,
     validRate, rateTable, rateFor, convert,
-    isActive, indexSnapshots, snapshotMonths, balanceFor, monthTotals, change, latestSnapshot, monthRange, dueList, goalProgress, splitIds, fixedSeries, fixedForMonth,
+    isActive, indexSnapshots, snapshotMonths, balanceFor, monthTotals, change, latestSnapshot, monthRange, dueList, lastDueMonth, notDueYet, entryMonth, defaultAsOf, goalProgress, splitIds, fixedSeries, fixedForMonth,
     splitImport, checkImport,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
