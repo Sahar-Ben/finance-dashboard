@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.23-3";
+  const APP_VERSION = "2026.10.23-4";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
@@ -598,7 +598,7 @@
 
   // ---------- Banks: each institution's total and this month's update status ----------
 
-  // Update status of one account for last month, which is due on its update day this month (home: for this year).
+  // Update status of one account for the current month (home: for this year).
   function updateStatus(a, idx, now) {
     const nowM = Calc.currentMonth(now);
     const day = now.getDate();
@@ -613,7 +613,7 @@
       if (nowM < dueM || (nowM === dueM && day < clamp(a.update_day, dueM))) return { kind: "info", text: `Yearly · ${MONTHS[um - 1]}` };
       return { kind: "due", text: `Due since ${clamp(a.update_day, dueM)} ${MONTHS[um - 1]}` };
     }
-    const s = idx.get(id, Calc.shiftMonth(nowM, -1));
+    const s = idx.get(id, nowM);
     if (s) return { kind: "ok", text: `Updated ${shortDate(Calc.normDate(s.as_of_date)) || ""}`.trim() };
     const d = clamp(a.update_day, nowM);
     const m = MONTHS[Number(nowM.slice(5)) - 1];
@@ -815,10 +815,10 @@
           <div class="label">${viewMy()} bank accounts · latest balances</div>
           <div class="big-number">${myNet != null ? esc(fmtMoney(myNet, cur)) : "—"}</div>
           <div class="muted small">${viewNote()}</div>
-          <div class="spread small"><span>${updated} of ${shown.length} updated for ${Calc.monthLabel(Calc.shiftMonth(nowM, -1), true)}</span>${heroChip}</div>
+          <div class="spread small"><span>${updated} of ${shown.length} updated for ${Calc.monthLabel(nowM, true)}</span>${heroChip}</div>
           <div class="bar"><span style="width:${Math.max(updated ? 2 : 0, (updated / shown.length) * 100).toFixed(1)}%"></span></div>
           ${todo.length ? `<div class="stack" style="gap:8px">
-            <div class="label">${whoTodo} · ${Calc.monthLabel(Calc.shiftMonth(nowM, -1), true)}</div>
+            <div class="label">${whoTodo} · ${Calc.monthLabel(nowM, true)}</div>
             ${todo.map((a) => `
               <button class="due-item" data-update="${esc(a.id)}">
                 <span><span class="due-name">${accountName(a)}</span>
@@ -829,11 +829,11 @@
           ${waiting.length ? `<p class="muted small">Waiting for ${esc(waitingFor.join(" & "))}: ${waiting.map((a) => `${accountName(a)} (${esc(statuses.get(a.id).text.replace(/^Due since/, "due since"))})`).join(", ")}.</p>` : ""}
         </div>
         ${bankCards}
-        <p class="muted small">Bank accounts only (savings, investments, pension, home and loans are on the Overview; cards on Spending). Totals use each account's latest balance, converted with that month's rate${viewMode() === "both" ? "" : "; joint accounts count 50%"}. Each month is updated on the update day of the next month. Green = last month updated, orange = due, grey = not due yet.</p>
+        <p class="muted small">Bank accounts only (savings, investments, pension, home and loans are on the Overview; cards on Spending). Totals use each account's latest balance, converted with that month's rate${viewMode() === "both" ? "" : "; joint accounts count 50%"}. Green = updated this month, orange = due, grey = not due yet.</p>
       </div>`;
     Charts.bind($screen);
     bindCurSeg();
-    $screen.querySelectorAll("[data-update]").forEach((b) => b.addEventListener("click", () => openManualFor(b.dataset.update, Calc.shiftMonth(nowM, -1))));
+    $screen.querySelectorAll("[data-update]").forEach((b) => b.addEventListener("click", () => openManualFor(b.dataset.update, nowM)));
     $screen.querySelectorAll("[data-acct]").forEach((b) => b.addEventListener("click", () => {
       const a = state.accounts.find((x) => String(x.id) === b.dataset.acct);
       if (a) openAccountDetail(a);
@@ -1329,7 +1329,7 @@
         if (!t.hasBalances) out.push(`no bank, savings or investment balance at all for ${Calc.monthLabel(mm, true)}`);
         t.missing.forEach((a) => out.push(`${norm(a.nickname) || a.id}: no balance for ${Calc.monthLabel(mm, true)} (updated by ${norm(a.updater) || "—"})`));
         t.unconverted.forEach((a) => out.push(`${norm(a.nickname) || a.id}: exchange rate missing for ${Calc.monthLabel(mm, true)}`));
-        t.notDue.forEach((n) => out.push(`${norm(n.account.nickname) || n.account.id}: not due until ${norm(n.account.update_day) || 1} ${Calc.monthLabel(Calc.shiftMonth(mm, 1), true)}`));
+        t.notDue.forEach((n) => out.push(`${norm(n.account.nickname) || n.account.id}: not due until ${norm(n.account.update_day) || 1} ${Calc.monthLabel(mm, true)}`));
       });
       return out;
     };
@@ -2462,7 +2462,7 @@
           <div class="label">Paste balances</div>
           <p class="muted">One balance per line:</p>
           <div class="code">${IMPORT_COLUMNS}</div>
-          <p class="muted small">Example: <span class="mono">${esc(Calc.entryMonth())} | bank-a-cur | 12,345.67 | ILS | ${esc(Calc.today())}</span><br>
+          <p class="muted small">Example: <span class="mono">${esc(Calc.currentMonth())} | bank-a-cur | 12,345.67 | ILS | ${esc(Calc.today())}</span><br>
             For cards, use the charge month and the card's monthly total. Nothing is saved until you approve the preview.</p>
           <button class="btn block" id="imp-copy">Copy account list</button>
         </div>
@@ -2684,7 +2684,7 @@
         : { ...(state.manualDraft || {}) };
     }
     const keep = state.manualDraft;
-    const keepMonth = keep.month || Calc.entryMonth();
+    const keepMonth = keep.month || Calc.currentMonth();
     const inQueue = queue.some((q) => q.account.id === keep.account_id && q.month === keepMonth);
     const showAll = state.manualShowAll || !mine.length || (keep.account_id && !mine.some((a) => a.id === keep.account_id));
 
@@ -2983,11 +2983,11 @@
     document.getElementById("set-day-all").addEventListener("click", (e) => run(e.currentTarget, true));
   }
 
-  // Entries made before the update day of the month they are filed under. Under the rule that each
-  // month is entered on the update day of the next month, they belong to the month before.
-  // Only the month being entered and later are checked; homes are yearly and stay.
+  // Card and salary entries made before the update day of the month they are filed under. Cards and
+  // salary are entered for the previous month, so they belong to the month before.
+  // Only last month and later are checked; balances stay in the month they were taken.
   function earlyEntries() {
-    const from = Calc.entryMonth();
+    const from = Calc.shiftMonth(Calc.currentMonth(), -1);
     const byId = new Map(state.accounts.map((a) => [lower(a.id), a]));
     const idx = Calc.indexSnapshots(state.snapshots);
     const out = [];
@@ -2995,7 +2995,7 @@
       const a = byId.get(lower(sn.account_id));
       const m = Calc.normMonth(sn.month);
       const d = Calc.normDate(sn.as_of_date) || Calc.normDate(norm(sn.entered_at).slice(0, 10));
-      if (!a || lower(a.type) === "home" || !m || !d || m < from || d.slice(0, 7) !== m) return;
+      if (!a || !isFlow(a) || !m || !d || m < from || d.slice(0, 7) !== m) return;
       // The later of the account's own day and the household's update day, so entries made on an
       // account's old update day still count as early before "Set all accounts" is used.
       const day = Math.max(Number(norm(a.update_day)) || 1, defaultUpdateDay() || 20);
@@ -3012,8 +3012,8 @@
     if (!movable.length) return "";
     return `
         <div class="card notice stack" id="early-card">
-          <div class="label">Entered before the update day</div>
-          <p class="muted small">Each month is now entered on the update day of the next month. These were entered earlier, so they probably belong to the month before. Untick any that should stay.</p>
+          <div class="label">Card and salary entries to move</div>
+          <p class="muted small">Card totals and salary entered on the update day now count for the previous month. These were entered before the update day under the old rule, so they probably belong to the month before. Untick any that should stay. Bank balances are not moved.</p>
           <div class="check-list">${list.map((e) => e.clash
             ? `<div class="check"><span><span>${accountName(e.account)}</span><span class="muted small">${esc(Calc.monthLabel(e.month, true))} · entered ${esc(shortDate(Calc.normDate(e.snap.as_of_date)))} · stays, ${esc(Calc.monthLabel(e.to, true))} already has one</span></span></div>`
             : `<label class="check"><input type="checkbox" value="${esc(e.snap.id)}" checked>
@@ -3368,8 +3368,8 @@
     Charts.bind($sheetBody);
     if (type === "loan") bindLoanHistory(a, idx);
     document.getElementById("ad-edit").addEventListener("click", () => openAccountForm(a));
-    // Opens the Update form on this account: its oldest missing month, else last month (the one being entered).
-    document.getElementById("ad-add").addEventListener("click", () => openManualFor(a.id, missingHere[0] || Calc.entryMonth()));
+    // Opens the Update form on this account: its oldest missing month, else the month it is entered for now.
+    document.getElementById("ad-add").addEventListener("click", () => openManualFor(a.id, missingHere[0] || Calc.entryMonth(a)));
     $sheetBody.querySelectorAll("[data-snap-edit]").forEach((b) => b.addEventListener("click", () => {
       openSnapshotEditor(a, idx.get(norm(a.id), b.dataset.snapEdit));
     }));
@@ -3585,7 +3585,7 @@
   // After adding an account: offer to enter its first balance straight away.
   function openAddedNext(acct) {
     route();
-    const m = Calc.entryMonth();
+    const m = Calc.entryMonth(acct);
     const flow = isFlow(acct);
     openSheet(`
       <div class="stack-lg">
