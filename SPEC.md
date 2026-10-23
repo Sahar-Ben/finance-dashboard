@@ -229,6 +229,7 @@ Build one stage at a time. After each stage: update SPEC.md, commit, merge to ma
 | `js/app.js` | Sign-in, routing between tabs, screens and forms. |
 | `manifest.webmanifest`, `icons/` | Home-screen web app metadata and a generic icon (finished in Stage 4). |
 | `.nojekyll` | Tells GitHub Pages to serve the files as they are. |
+| `CLAUDE.md` | Working rules for future sessions: privacy, the change routine (SPEC entry, version bump, publish, checklist) and code conventions. |
 
 ### Hosting
 
