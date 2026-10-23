@@ -3,7 +3,7 @@
   "use strict";
 
   // Shown in More, and used in index.html (?v=…) so phones load new files after an update.
-  const APP_VERSION = "2026.10.16-2";
+  const APP_VERSION = "2026.10.23-1";
   const SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets";
   const SCOPE_EMAIL = "https://www.googleapis.com/auth/userinfo.email";
   const TYPES = ["current", "savings", "investment", "crypto", "long_term", "study_fund", "loan", "home", "card", "salary"];
@@ -2887,6 +2887,18 @@
             <button type="button" class="btn small" id="set-hide">${state.hideAmounts ? "Show amounts" : "Hide amounts"}</button></div>
           <p class="muted small">Replaces every amount with dots on this device, including charts. The eye button at the top of each screen does the same.</p>
         </div>
+        <div class="card stack">
+          <div class="label">Monthly update day</div>
+          <p class="muted small">The day of the month all balances are updated. New accounts start with it, and the button sets it on every active account (a home keeps its month).</p>
+          <div class="field-row">
+            <div class="field"><label class="label" for="set-day">Day</label>
+              <input id="set-day" type="number" inputmode="numeric" min="1" max="31" value="${esc(defaultUpdateDay() || 20)}"></div>
+            <div class="field" style="justify-content:flex-end"><button type="button" class="btn block" id="set-day-save">Save day</button></div>
+          </div>
+          <button type="button" class="btn block" id="set-day-all">Set all accounts to this day</button>
+          <p class="muted small" id="set-day-status">${esc(updateDayStatus())}</p>
+          <p class="err-text" id="set-day-err"></p>
+        </div>
         <div id="lock-settings"></div>
         <details class="card fold">
           <summary class="spread"><div><div class="label">People & sign-in</div>
@@ -2904,6 +2916,7 @@
       </div>`;
     bindPeopleForm(false);
     document.getElementById("set-hide").addEventListener("click", () => setHideAmounts(!state.hideAmounts));
+    bindUpdateDay();
     lockSettingsHtml().then((html) => {
       const host = document.getElementById("lock-settings");
       if (!host) return;
@@ -2914,6 +2927,58 @@
     document.getElementById("set-forget").addEventListener("click", () => {
       if (confirm("Forget this sheet on this device? Nothing in the sheet is deleted.")) forgetSheet();
     });
+  }
+
+  // Settings `update_day`: the shared monthly update day, or "" when not set.
+  function defaultUpdateDay() {
+    const d = Number(norm(state.settings.update_day));
+    return Number.isInteger(d) && d >= 1 && d <= 31 ? d : "";
+  }
+
+  function updateDayStatus() {
+    const active = state.accounts.filter(isActive);
+    const day = defaultUpdateDay();
+    if (!day || !active.length) return "";
+    const off = active.filter((a) => Number(norm(a.update_day)) !== day).length;
+    return off ? `${off} of ${active.length} active accounts use a different day.` : `All ${active.length} active accounts are updated on day ${day}.`;
+  }
+
+  function bindUpdateDay() {
+    const $err = document.getElementById("set-day-err");
+    const read = () => {
+      const v = norm(document.getElementById("set-day").value);
+      const d = Number(v);
+      if (!/^\d+$/.test(v) || d < 1 || d > 31) { $err.textContent = "The day must be a whole number from 1 to 31."; return null; }
+      $err.textContent = "";
+      return d;
+    };
+    const run = async (btn, all) => {
+      const day = read();
+      if (!day) return;
+      if (all && !confirm(`Set the update day of every active account to the ${day}? Balances are not changed.`)) return;
+      setBusy(btn, true, "Saving…");
+      try {
+        const changed = await guarded(async () => {
+          await Sheets.writeSettings({ update_day: day });
+          if (!all) return null;
+          // Fresh read so only the update_day cell of each row changes.
+          const { rows } = await Sheets.readTab("Accounts");
+          const updates = rows.filter((a) => isActive(a) && Number(norm(a.update_day)) !== day)
+            .map((a) => ({ key: a.id, changes: { update_day: day } }));
+          await Sheets.updateRows("Accounts", "id", updates);
+          return updates.length;
+        });
+        await loadData();
+        toast(!all ? `Saved. New accounts start on day ${day}.`
+          : changed ? `Updated ${changed} account${changed > 1 ? "s" : ""} to day ${day}.` : `All accounts already use day ${day}.`);
+        route();
+      } catch (ex) {
+        $err.textContent = friendlyError(ex);
+        setBusy(btn, false);
+      }
+    };
+    document.getElementById("set-day-save").addEventListener("click", (e) => run(e.currentTarget, false));
+    document.getElementById("set-day-all").addEventListener("click", (e) => run(e.currentTarget, true));
   }
 
   function peopleFormHtml(embedded) {
@@ -3476,7 +3541,7 @@
 
   function openAccountForm(acct) {
     const isNew = !acct;
-    const a = acct || { type: "current", currency: "ILS", owner: state.me.name, updater: state.me.name, active: true };
+    const a = acct || { type: "current", currency: "ILS", owner: state.me.name, updater: state.me.name, update_day: defaultUpdateDay(), active: true };
     const type = lower(a.type) || "current";
     const names = personNames();
     const linkable = state.accounts.filter((x) => isActive(x) && !isFlow(x) && x.id !== a.id);
@@ -3721,8 +3786,10 @@
       const updater = matchName(c.updater, names);
       if (!updater) problems.push({ col: "updater", msg: `Unknown updater "${c.updater}". Use ${names.join(" or ")}.` });
 
-      const day = Number(c.update_day);
-      if (!/^\d+$/.test(c.update_day) || day < 1 || day > 31) problems.push({ col: "update_day", msg: "Due day must be 1–31." });
+      // An empty due day takes the monthly update day from More, when one is set.
+      const dayText = c.update_day === "" && defaultUpdateDay() ? String(defaultUpdateDay()) : c.update_day;
+      const day = Number(dayText);
+      if (!/^\d+$/.test(dayText) || day < 1 || day > 31) problems.push({ col: "update_day", msg: "Due day must be 1–31." });
 
       const linked = lower(c.linked_account);
       if (linked) {
